@@ -1,11 +1,42 @@
 #include "FileDialog.hpp"
 
 #include <array>
+
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <commdlg.h>
+#else
 #include <cstdio>
 #include <memory>
 #include <string>
+#endif
 
 namespace pointmod {
+
+#if defined(_WIN32)
+
+std::optional<std::filesystem::path> OpenPointCloudDialog() {
+  std::array<wchar_t, 32768> selectedPath{};
+  OPENFILENAMEW dialogConfig{};
+  dialogConfig.lStructSize = sizeof(dialogConfig);
+  dialogConfig.lpstrFilter = L"Point Clouds (*.ply)\0*.ply\0All Files (*.*)\0*.*\0";
+  dialogConfig.lpstrFile = selectedPath.data();
+  dialogConfig.nMaxFile = static_cast<DWORD>(selectedPath.size());
+  dialogConfig.lpstrTitle = L"Open Point Cloud";
+  dialogConfig.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER;
+  dialogConfig.lpstrDefExt = L"ply";
+
+  if (GetOpenFileNameW(&dialogConfig) == FALSE) {
+    return std::nullopt;
+  }
+
+  return std::filesystem::path(selectedPath.data());
+}
+
+#else
 
 namespace {
 
@@ -56,5 +87,7 @@ std::optional<std::filesystem::path> OpenPointCloudDialog() {
 
   return std::nullopt;
 }
+
+#endif
 
 }  // namespace pointmod

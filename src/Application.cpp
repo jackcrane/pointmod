@@ -3,15 +3,9 @@
 
 #include "CocoaMenu.hpp"
 #include "FileDialog.hpp"
+#include "OpenGL.hpp"
 
 #include <GLFW/glfw3.h>
-#if defined(__APPLE__)
-#include <OpenGL/gl3.h>
-#else
-#define GL_GLEXT_PROTOTYPES
-#include <GL/gl.h>
-#include <GL/glext.h>
-#endif
 #include <imgui.h>
 #include <backends/imgui_impl_glfw.h>
 #include <backends/imgui_impl_opengl3.h>
@@ -113,9 +107,11 @@ void Application::InitializeWindow() {
 
   glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
   glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 2);
-  glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
   glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+#if defined(__APPLE__)
+  glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
   glfwWindowHint(GLFW_COCOA_RETINA_FRAMEBUFFER, GLFW_TRUE);
+#endif
 
   window_ = glfwCreateWindow(1600, 1000, "pointmod", nullptr, nullptr);
   if (window_ == nullptr) {
@@ -123,6 +119,9 @@ void Application::InitializeWindow() {
   }
 
   glfwMakeContextCurrent(window_);
+  if (!InitializeOpenGLBindings()) {
+    throw std::runtime_error("Failed to load required OpenGL functions.");
+  }
   glfwSwapInterval(1);
   glfwSetWindowUserPointer(window_, this);
   glfwSetScrollCallback(window_, [](GLFWwindow* window, double, double yoffset) {

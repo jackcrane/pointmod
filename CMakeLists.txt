@@ -7,6 +7,10 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+if(MSVC)
+  set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+
 if(APPLE)
   enable_language(OBJCXX)
 endif()
@@ -98,10 +102,15 @@ else()
   list(APPEND POINTMOD_PLATFORM_LIBS OpenGL::GL)
 endif()
 
+if(WIN32)
+  list(APPEND POINTMOD_PLATFORM_LIBS Comdlg32)
+endif()
+
 add_executable(pointmod
   src/main.cpp
   src/Application.cpp
   src/AsyncPointCloudLoader.cpp
+  src/OpenGL.cpp
   src/OrbitCamera.cpp
   src/PointCloud.cpp
   src/PlyAsciiLoader.cpp
