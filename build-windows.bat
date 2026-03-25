@@ -1,7 +1,8 @@
 @echo off
 setlocal
 
-for %%I in ("%~dp0.") do set "ROOT_DIR=%%~fI"
+set "ROOT_DIR=%~dp0"
+if "%ROOT_DIR:~-1%"=="\" set "ROOT_DIR=%ROOT_DIR:~0,-1%"
 if "%BUILD_DIR%"=="" set "BUILD_DIR=%ROOT_DIR%\build-windows"
 if "%CONFIG%"=="" set "CONFIG=Release"
 
