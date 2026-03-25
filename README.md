@@ -35,3 +35,6 @@ Notes:
 - The loader currently supports ASCII PLY vertex clouds only.
 - The default resident render budget is `80,000,000` points; larger files are sampled with a fixed stride while streaming.
 - The UI reports FPS and the currently selected display detail level.
+
+
+bump
