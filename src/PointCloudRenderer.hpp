@@ -9,6 +9,12 @@
 
 namespace pointmod {
 
+enum class RenderDetail {
+  kFull,
+  kBalanced,
+  kInteraction,
+};
+
 class PointCloudRenderer {
  public:
   ~PointCloudRenderer();
@@ -17,10 +23,11 @@ class PointCloudRenderer {
   void Shutdown();
   void Clear();
   void Append(const PointCloudChunk& chunk);
-  void Render(const OrbitCamera& camera, int viewportWidth, int viewportHeight, float pointSize, bool lowDetailMode) const;
+  void Render(const OrbitCamera& camera, int viewportWidth, int viewportHeight, float pointSize, RenderDetail detail) const;
 
   [[nodiscard]] bool HasCloud() const;
   [[nodiscard]] std::size_t PointCount() const;
+  [[nodiscard]] std::size_t DisplayPointCount(RenderDetail detail) const;
   [[nodiscard]] const Bounds& CurrentBounds() const;
   [[nodiscard]] std::string Error() const;
 
@@ -29,6 +36,9 @@ class PointCloudRenderer {
     unsigned int vao = 0;
     unsigned int vbo = 0;
     std::size_t pointCount = 0;
+    unsigned int balancedVao = 0;
+    unsigned int balancedVbo = 0;
+    std::size_t balancedPointCount = 0;
     unsigned int interactionVao = 0;
     unsigned int interactionVbo = 0;
     std::size_t interactionPointCount = 0;

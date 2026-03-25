@@ -21,6 +21,7 @@ class Application {
   void RenderUi();
   void RenderScene();
   void UpdateCloudLoading();
+  void UpdateFrameStats();
   void HandleCameraInput();
   void StartOpenDialog();
   void OpenPointCloud(const std::filesystem::path& path);
@@ -40,6 +41,10 @@ class Application {
   bool cameraFramed_ = false;
   bool cameraTouched_ = false;
   bool interactionActive_ = false;
+  double lastFrameTimeSeconds_ = 0.0;
+  float smoothedFrameMs_ = 0.0f;
+  float smoothedFps_ = 0.0f;
+  RenderDetail activeRenderDetail_ = RenderDetail::kFull;
   bool glfwInitialized_ = false;
   bool imguiInitialized_ = false;
 };

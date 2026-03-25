@@ -22,6 +22,63 @@
 
 namespace pointmod {
 
+namespace {
+
+constexpr std::size_t kFullDetailPointBudget = 8'000'000;
+constexpr std::size_t kBalancedDetailPointBudget = 30'000'000;
+
+const char* DetailLabel(RenderDetail detail) {
+  switch (detail) {
+    case RenderDetail::kFull:
+      return "Full";
+    case RenderDetail::kBalanced:
+      return "Balanced";
+    case RenderDetail::kInteraction:
+      return "Interaction";
+  }
+  return "Unknown";
+}
+
+RenderDetail ChooseRenderDetail(
+  RenderDetail currentDetail,
+  std::size_t residentPointCount,
+  bool loading,
+  bool interactionActive,
+  float smoothedFps) {
+  if (interactionActive || loading) {
+    return RenderDetail::kInteraction;
+  }
+
+  if (residentPointCount > kBalancedDetailPointBudget) {
+    return RenderDetail::kBalanced;
+  }
+
+  if (currentDetail == RenderDetail::kInteraction) {
+    if (residentPointCount > kFullDetailPointBudget) {
+      return RenderDetail::kBalanced;
+    }
+    return smoothedFps >= 40.0f ? RenderDetail::kFull : RenderDetail::kBalanced;
+  }
+
+  if (currentDetail == RenderDetail::kBalanced) {
+    if (smoothedFps > 50.0f && residentPointCount <= kFullDetailPointBudget) {
+      return RenderDetail::kFull;
+    }
+    if (smoothedFps > 0.0f && smoothedFps < 20.0f) {
+      return RenderDetail::kInteraction;
+    }
+    return RenderDetail::kBalanced;
+  }
+
+  if (residentPointCount > kFullDetailPointBudget || (smoothedFps > 0.0f && smoothedFps < 32.0f)) {
+    return RenderDetail::kBalanced;
+  }
+
+  return RenderDetail::kFull;
+}
+
+}  // namespace
+
 int Application::Run() {
   try {
     InitializeWindow();
@@ -32,6 +89,7 @@ int Application::Run() {
       glfwPollEvents();
       UpdateCloudLoading();
       HandleCameraInput();
+      UpdateFrameStats();
 
       BeginImGuiFrame();
       RenderUi();
@@ -170,6 +228,11 @@ void Application::RenderUi() {
       if (currentCloud_.sampledRender) {
         ImGui::Text("Sampling stride: 1 / %llu", static_cast<unsigned long long>(currentCloud_.samplingStride));
       }
+      ImGui::Text("FPS: %.1f (%.2f ms)", smoothedFps_, smoothedFrameMs_);
+      ImGui::Text(
+        "Display detail: %s (%llu pts)",
+        DetailLabel(activeRenderDetail_),
+        static_cast<unsigned long long>(renderer_.DisplayPointCount(activeRenderDetail_)));
     } else {
       ImGui::TextUnformatted("No point cloud loaded");
     }
@@ -200,8 +263,7 @@ void Application::RenderScene() {
   glClearColor(0.05f, 0.07f, 0.10f, 1.0f);
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-  const bool lowDetailMode = interactionActive_ || loader_.Snapshot().loading;
-  renderer_.Render(camera_, framebufferWidth, framebufferHeight, pointSize_, lowDetailMode);
+  renderer_.Render(camera_, framebufferWidth, framebufferHeight, pointSize_, activeRenderDetail_);
 }
 
 void Application::UpdateCloudLoading() {
@@ -231,6 +293,35 @@ void Application::UpdateCloudLoading() {
     }
     statusMessage_ = "Loaded " + currentCloud_.sourcePath.filename().string();
   }
+}
+
+void Application::UpdateFrameStats() {
+  const double now = glfwGetTime();
+  if (lastFrameTimeSeconds_ <= 0.0) {
+    lastFrameTimeSeconds_ = now;
+    return;
+  }
+
+  const float frameMs = static_cast<float>((now - lastFrameTimeSeconds_) * 1000.0);
+  lastFrameTimeSeconds_ = now;
+  if (frameMs <= 0.0f) {
+    return;
+  }
+
+  if (smoothedFrameMs_ <= 0.0f) {
+    smoothedFrameMs_ = frameMs;
+  } else {
+    smoothedFrameMs_ = smoothedFrameMs_ * 0.9f + frameMs * 0.1f;
+  }
+  smoothedFps_ = smoothedFrameMs_ > 0.0f ? 1000.0f / smoothedFrameMs_ : 0.0f;
+
+  const bool loading = loader_.Snapshot().loading;
+  activeRenderDetail_ = ChooseRenderDetail(
+    activeRenderDetail_,
+    renderer_.PointCount(),
+    loading,
+    interactionActive_,
+    smoothedFps_);
 }
 
 void Application::HandleCameraInput() {
@@ -313,6 +404,7 @@ void Application::OpenPointCloud(const std::filesystem::path& path) {
   cameraFramed_ = false;
   cameraTouched_ = false;
   interactionActive_ = false;
+  activeRenderDetail_ = RenderDetail::kFull;
   loader_.Start(path);
   statusMessage_ = "Opening " + path.filename().string();
 }

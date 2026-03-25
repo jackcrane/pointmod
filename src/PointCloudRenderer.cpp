@@ -16,7 +16,8 @@ namespace pointmod {
 
 namespace {
 
-constexpr std::size_t kTargetInteractionChunkPoints = 125'000;
+constexpr std::size_t kTargetBalancedChunkPoints = 64'000;
+constexpr std::size_t kTargetInteractionChunkPoints = 16'000;
 
 constexpr const char* kVertexShaderSource = R"(
 #version 150 core
@@ -65,6 +66,20 @@ void UploadBuffer(
   glVertexAttribPointer(1, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(PointVertex), reinterpret_cast<void*>(offsetof(PointVertex, r)));
   glBindBuffer(GL_ARRAY_BUFFER, 0);
   glBindVertexArray(0);
+}
+
+std::vector<PointVertex> BuildReducedPoints(const std::vector<PointVertex>& points, std::size_t targetPointCount) {
+  if (points.size() <= targetPointCount || targetPointCount == 0) {
+    return {};
+  }
+
+  const std::size_t stride = std::max<std::size_t>(1, (points.size() + targetPointCount - 1) / targetPointCount);
+  std::vector<PointVertex> reducedPoints;
+  reducedPoints.reserve((points.size() + stride - 1) / stride);
+  for (std::size_t pointIndex = 0; pointIndex < points.size(); pointIndex += stride) {
+    reducedPoints.push_back(points[pointIndex]);
+  }
+  return reducedPoints;
 }
 
 }  // namespace
@@ -134,6 +149,14 @@ void PointCloudRenderer::Clear() {
       glDeleteVertexArrays(1, &chunk.vao);
       chunk.vao = 0;
     }
+    if (chunk.balancedVbo != 0) {
+      glDeleteBuffers(1, &chunk.balancedVbo);
+      chunk.balancedVbo = 0;
+    }
+    if (chunk.balancedVao != 0) {
+      glDeleteVertexArrays(1, &chunk.balancedVao);
+      chunk.balancedVao = 0;
+    }
     if (chunk.interactionVbo != 0) {
       glDeleteBuffers(1, &chunk.interactionVbo);
       chunk.interactionVbo = 0;
@@ -162,16 +185,16 @@ void PointCloudRenderer::Append(const PointCloudChunk& chunk) {
   gpuChunk.pointCount = chunk.points.size();
   UploadBuffer(gpuChunk.vao, gpuChunk.vbo, chunk.points);
 
-  const std::size_t interactionStride = std::max<std::size_t>(
-    1,
-    (chunk.points.size() + kTargetInteractionChunkPoints - 1) / kTargetInteractionChunkPoints);
-  if (interactionStride > 1) {
-    std::vector<PointVertex> interactionPoints;
-    interactionPoints.reserve((chunk.points.size() + interactionStride - 1) / interactionStride);
-    for (std::size_t pointIndex = 0; pointIndex < chunk.points.size(); pointIndex += interactionStride) {
-      interactionPoints.push_back(chunk.points[pointIndex]);
-    }
+  std::vector<PointVertex> balancedPoints = BuildReducedPoints(chunk.points, kTargetBalancedChunkPoints);
+  if (!balancedPoints.empty()) {
+    gpuChunk.balancedPointCount = balancedPoints.size();
+    UploadBuffer(gpuChunk.balancedVao, gpuChunk.balancedVbo, balancedPoints);
+  }
 
+  std::vector<PointVertex> interactionPoints = BuildReducedPoints(
+    !balancedPoints.empty() ? balancedPoints : chunk.points,
+    kTargetInteractionChunkPoints);
+  if (!interactionPoints.empty()) {
     gpuChunk.interactionPointCount = interactionPoints.size();
     UploadBuffer(gpuChunk.interactionVao, gpuChunk.interactionVbo, interactionPoints);
   }
@@ -187,7 +210,7 @@ void PointCloudRenderer::Render(
   int viewportWidth,
   int viewportHeight,
   float pointSize,
-  bool lowDetailMode) const {
+  RenderDetail detail) const {
   if (!initialized_ || pointCount_ == 0 || viewportWidth <= 0 || viewportHeight <= 0) {
     return;
   }
@@ -202,10 +225,18 @@ void PointCloudRenderer::Render(
   glUniform1f(pointSizeLocation_, pointSize);
 
   for (const GpuChunk& chunk : chunks_) {
-    const unsigned int vao = lowDetailMode && chunk.interactionPointCount > 0 ? chunk.interactionVao : chunk.vao;
-    const std::size_t pointCount = lowDetailMode && chunk.interactionPointCount > 0
-      ? chunk.interactionPointCount
-      : chunk.pointCount;
+    unsigned int vao = chunk.vao;
+    std::size_t pointCount = chunk.pointCount;
+    if (detail == RenderDetail::kInteraction && chunk.interactionPointCount > 0) {
+      vao = chunk.interactionVao;
+      pointCount = chunk.interactionPointCount;
+    } else if (detail == RenderDetail::kInteraction && chunk.balancedPointCount > 0) {
+      vao = chunk.balancedVao;
+      pointCount = chunk.balancedPointCount;
+    } else if (detail == RenderDetail::kBalanced && chunk.balancedPointCount > 0) {
+      vao = chunk.balancedVao;
+      pointCount = chunk.balancedPointCount;
+    }
     glBindVertexArray(vao);
     glDrawArrays(GL_POINTS, 0, static_cast<GLsizei>(pointCount));
   }
@@ -220,6 +251,22 @@ bool PointCloudRenderer::HasCloud() const {
 
 std::size_t PointCloudRenderer::PointCount() const {
   return pointCount_;
+}
+
+std::size_t PointCloudRenderer::DisplayPointCount(RenderDetail detail) const {
+  std::size_t displayPointCount = 0;
+  for (const GpuChunk& chunk : chunks_) {
+    if (detail == RenderDetail::kInteraction && chunk.interactionPointCount > 0) {
+      displayPointCount += chunk.interactionPointCount;
+    } else if (detail == RenderDetail::kInteraction && chunk.balancedPointCount > 0) {
+      displayPointCount += chunk.balancedPointCount;
+    } else if (detail == RenderDetail::kBalanced && chunk.balancedPointCount > 0) {
+      displayPointCount += chunk.balancedPointCount;
+    } else {
+      displayPointCount += chunk.pointCount;
+    }
+  }
+  return displayPointCount;
 }
 
 const Bounds& PointCloudRenderer::CurrentBounds() const {
