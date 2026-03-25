@@ -5,8 +5,8 @@
 #include <cstdint>
 #include <cstdlib>
 #include <fstream>
+#include <ios>
 #include <optional>
-#include <random>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -41,7 +41,7 @@ bool StartsWith(std::string_view value, std::string_view prefix) {
   return value.substr(0, prefix.size()) == prefix;
 }
 
-HeaderInfo ParseHeader(std::ifstream& input) {
+HeaderInfo ParseHeader(std::istream& input) {
   HeaderInfo info;
   std::string line;
   bool inVertexElement = false;
@@ -142,7 +142,7 @@ double ParseNextScalar(char*& cursor) {
 
 PointVertex ParseVertex(
   std::string& line,
-  std::size_t propertyCount,
+  std::size_t lastRelevantPropertyIndex,
   std::size_t xIndex,
   std::size_t yIndex,
   std::size_t zIndex,
@@ -153,7 +153,7 @@ PointVertex ParseVertex(
   PointVertex vertex{};
   char* cursor = line.data();
 
-  for (std::size_t propertyIndex = 0; propertyIndex < propertyCount; ++propertyIndex) {
+  for (std::size_t propertyIndex = 0; propertyIndex <= lastRelevantPropertyIndex; ++propertyIndex) {
     const double value = ParseNextScalar(cursor);
 
     if (propertyIndex == xIndex) {
@@ -196,17 +196,38 @@ void ReportProgress(
   });
 }
 
+std::uint64_t ComputeSamplingStride(std::uint64_t vertexCount, std::uint64_t maxRenderPoints) {
+  if (maxRenderPoints == 0 || vertexCount <= maxRenderPoints) {
+    return 1;
+  }
+
+  return (vertexCount + maxRenderPoints - 1) / maxRenderPoints;
+}
+
+void FlushChunk(const PlyPointChunkCallback& onChunk, PointCloudChunk& chunk) {
+  if (!onChunk || chunk.points.empty()) {
+    return;
+  }
+
+  onChunk(std::move(chunk));
+  chunk = {};
+}
+
 }  // namespace
 
-PointCloudData LoadAsciiPlyPreview(
+PointCloudData LoadAsciiPly(
   const std::filesystem::path& path,
   const PlyLoadOptions& options,
   std::stop_token stopToken,
-  const PlyLoadProgressCallback& onProgress) {
-  std::ifstream input(path);
-  if (!input.is_open()) {
+  const PlyLoadProgressCallback& onProgress,
+  const PlyPointChunkCallback& onChunk) {
+  std::vector<char> readBuffer(1 << 20);
+  std::filebuf fileBuffer;
+  fileBuffer.pubsetbuf(readBuffer.data(), static_cast<std::streamsize>(readBuffer.size()));
+  if (fileBuffer.open(path, std::ios::in) == nullptr) {
     throw std::runtime_error("Failed to open file.");
   }
+  std::istream input(&fileBuffer);
 
   const std::uint64_t totalBytes = static_cast<std::uint64_t>(std::filesystem::file_size(path));
   ReportProgress(onProgress, 0, totalBytes, 0, 0, "Reading header");
@@ -224,15 +245,30 @@ PointCloudData LoadAsciiPlyPreview(
   const std::optional<std::size_t> greenIndex = FindPropertyIndex(header.vertexProperties, "green");
   const std::optional<std::size_t> blueIndex = FindPropertyIndex(header.vertexProperties, "blue");
   const std::optional<std::size_t> alphaIndex = FindPropertyIndex(header.vertexProperties, "alpha");
+  const std::size_t lastRelevantPropertyIndex = std::max({
+    *xIndex,
+    *yIndex,
+    *zIndex,
+    redIndex.value_or(0),
+    greenIndex.value_or(0),
+    blueIndex.value_or(0),
+    alphaIndex.value_or(0),
+  });
+  const std::uint64_t samplingStride = ComputeSamplingStride(header.vertexCount, options.maxRenderPoints);
 
   PointCloudData result;
   result.sourcePath = path;
   result.sourcePointCount = header.vertexCount;
-  result.points.reserve(std::min<std::size_t>(options.maxPreviewPoints, static_cast<std::size_t>(header.vertexCount)));
+  result.sampledRender = samplingStride > 1;
+  result.samplingStride = samplingStride;
 
-  std::mt19937_64 random{0x706f696e746d6f64ULL};
+  PointCloudChunk chunk;
+  chunk.points.reserve(std::max<std::size_t>(options.streamBatchPoints, 1));
+
   std::string line;
+  line.reserve(256);
   std::uint64_t bytesRead = header.bytesConsumed;
+  const std::string progressStatus = result.sampledRender ? "Streaming sampled points" : "Streaming points";
 
   for (std::uint64_t pointIndex = 0; pointIndex < header.vertexCount; ++pointIndex) {
     if (stopToken.stop_requested()) {
@@ -246,7 +282,7 @@ PointCloudData LoadAsciiPlyPreview(
     bytesRead += static_cast<std::uint64_t>(line.size() + 1);
     PointVertex vertex = ParseVertex(
       line,
-      header.vertexProperties.size(),
+      lastRelevantPropertyIndex,
       *xIndex,
       *yIndex,
       *zIndex,
@@ -257,13 +293,18 @@ PointCloudData LoadAsciiPlyPreview(
 
     result.bounds.Expand({vertex.x, vertex.y, vertex.z});
 
-    if (result.points.size() < options.maxPreviewPoints) {
-      result.points.push_back(vertex);
-    } else {
-      std::uniform_int_distribution<std::uint64_t> distribution(0, pointIndex);
-      const std::uint64_t replacementIndex = distribution(random);
-      if (replacementIndex < result.points.size()) {
-        result.points[static_cast<std::size_t>(replacementIndex)] = vertex;
+    if ((pointIndex % samplingStride) == 0) {
+      chunk.points.push_back(vertex);
+      ++result.renderPointCount;
+
+      if (chunk.points.size() >= std::max<std::size_t>(options.streamBatchPoints, 1)) {
+        chunk.bounds = result.bounds;
+        chunk.sourcePointsRead = pointIndex + 1;
+        chunk.sourcePointCount = header.vertexCount;
+        chunk.renderedPointCount = result.renderPointCount;
+        chunk.sampledRender = result.sampledRender;
+        chunk.samplingStride = result.samplingStride;
+        FlushChunk(onChunk, chunk);
       }
     }
 
@@ -273,19 +314,25 @@ PointCloudData LoadAsciiPlyPreview(
         bytesRead,
         totalBytes,
         pointIndex + 1,
-        static_cast<std::uint64_t>(result.points.size()),
-        "Sampling preview");
+        result.renderPointCount,
+        progressStatus);
     }
   }
 
-  result.previewPointCount = static_cast<std::uint64_t>(result.points.size());
-  result.sampledPreview = result.previewPointCount < result.sourcePointCount;
+  chunk.bounds = result.bounds;
+  chunk.sourcePointsRead = result.sourcePointCount;
+  chunk.sourcePointCount = result.sourcePointCount;
+  chunk.renderedPointCount = result.renderPointCount;
+  chunk.sampledRender = result.sampledRender;
+  chunk.samplingStride = result.samplingStride;
+  FlushChunk(onChunk, chunk);
+
   ReportProgress(
     onProgress,
     totalBytes,
     totalBytes,
     result.sourcePointCount,
-    result.previewPointCount,
+    result.renderPointCount,
     "Ready");
 
   return result;

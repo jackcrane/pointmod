@@ -42,13 +42,24 @@ struct Bounds {
   [[nodiscard]] float Radius() const;
 };
 
+struct PointCloudChunk {
+  std::vector<PointVertex> points;
+  Bounds bounds;
+  std::uint64_t sourcePointsRead = 0;
+  std::uint64_t sourcePointCount = 0;
+  std::uint64_t renderedPointCount = 0;
+  bool sampledRender = false;
+  std::uint64_t samplingStride = 1;
+};
+
 struct PointCloudData {
   std::filesystem::path sourcePath;
   std::vector<PointVertex> points;
   Bounds bounds;
   std::uint64_t sourcePointCount = 0;
-  std::uint64_t previewPointCount = 0;
-  bool sampledPreview = false;
+  std::uint64_t renderPointCount = 0;
+  bool sampledRender = false;
+  std::uint64_t samplingStride = 1;
 };
 
 }  // namespace pointmod

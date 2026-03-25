@@ -6,7 +6,8 @@ Current scope:
 
 - Native `File > Open…` menu wired through Cocoa.
 - ASCII `.ply` point cloud loading on a background thread.
-- Reservoir-sampled preview path so very large files do not try to upload every point to the GPU.
+- Progressive chunk streaming so points appear on screen while the file is still loading.
+- Chunked GPU uploads with a lower-detail interaction path for smoother orbit/pan/zoom on very large clouds.
 - Orbit/pan/zoom camera with a simple OpenGL point renderer.
 
 Build:
@@ -21,4 +22,4 @@ Notes:
 
 - CMake is set to fetch GLFW and Dear ImGui during configure.
 - The loader currently supports ASCII PLY vertex clouds only.
-- The preview cap is `5,000,000` points; larger files are sampled into that bounded preview buffer.
+- The default resident render budget is `80,000,000` points; larger files are sampled with a fixed stride while streaming.

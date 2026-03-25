@@ -16,6 +16,8 @@ namespace pointmod {
 
 namespace {
 
+constexpr std::size_t kTargetInteractionChunkPoints = 125'000;
+
 constexpr const char* kVertexShaderSource = R"(
 #version 150 core
 in vec3 aPosition;
@@ -43,6 +45,28 @@ void main() {
 }
 )";
 
+void UploadBuffer(
+  unsigned int& vao,
+  unsigned int& vbo,
+  const std::vector<PointVertex>& points) {
+  glGenVertexArrays(1, &vao);
+  glGenBuffers(1, &vbo);
+
+  glBindVertexArray(vao);
+  glBindBuffer(GL_ARRAY_BUFFER, vbo);
+  glBufferData(
+    GL_ARRAY_BUFFER,
+    static_cast<GLsizeiptr>(points.size() * sizeof(PointVertex)),
+    points.data(),
+    GL_STATIC_DRAW);
+  glEnableVertexAttribArray(0);
+  glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(PointVertex), reinterpret_cast<void*>(offsetof(PointVertex, x)));
+  glEnableVertexAttribArray(1);
+  glVertexAttribPointer(1, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(PointVertex), reinterpret_cast<void*>(offsetof(PointVertex, r)));
+  glBindBuffer(GL_ARRAY_BUFFER, 0);
+  glBindVertexArray(0);
+}
+
 }  // namespace
 
 PointCloudRenderer::~PointCloudRenderer() {
@@ -54,20 +78,15 @@ void PointCloudRenderer::Shutdown() {
     return;
   }
 
-  if (vbo_ != 0) {
-    glDeleteBuffers(1, &vbo_);
-    vbo_ = 0;
-  }
-  if (vao_ != 0) {
-    glDeleteVertexArrays(1, &vao_);
-    vao_ = 0;
-  }
+  Clear();
+
   if (program_ != 0) {
     glDeleteProgram(program_);
     program_ = 0;
   }
 
-  pointCount_ = 0;
+  viewProjectionLocation_ = -1;
+  pointSizeLocation_ = -1;
   initialized_ = false;
 }
 
@@ -100,37 +119,75 @@ void PointCloudRenderer::Initialize() {
     throw std::runtime_error("Failed to link point cloud shader program.");
   }
 
-  glGenVertexArrays(1, &vao_);
-  glGenBuffers(1, &vbo_);
-
-  glBindVertexArray(vao_);
-  glBindBuffer(GL_ARRAY_BUFFER, vbo_);
-  glEnableVertexAttribArray(0);
-  glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(PointVertex), reinterpret_cast<void*>(offsetof(PointVertex, x)));
-  glEnableVertexAttribArray(1);
-  glVertexAttribPointer(1, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(PointVertex), reinterpret_cast<void*>(offsetof(PointVertex, r)));
-  glBindVertexArray(0);
-
+  viewProjectionLocation_ = glGetUniformLocation(program_, "uViewProjection");
+  pointSizeLocation_ = glGetUniformLocation(program_, "uPointSize");
   initialized_ = true;
 }
 
-void PointCloudRenderer::Upload(const PointCloudData& cloud) {
-  Initialize();
+void PointCloudRenderer::Clear() {
+  for (GpuChunk& chunk : chunks_) {
+    if (chunk.vbo != 0) {
+      glDeleteBuffers(1, &chunk.vbo);
+      chunk.vbo = 0;
+    }
+    if (chunk.vao != 0) {
+      glDeleteVertexArrays(1, &chunk.vao);
+      chunk.vao = 0;
+    }
+    if (chunk.interactionVbo != 0) {
+      glDeleteBuffers(1, &chunk.interactionVbo);
+      chunk.interactionVbo = 0;
+    }
+    if (chunk.interactionVao != 0) {
+      glDeleteVertexArrays(1, &chunk.interactionVao);
+      chunk.interactionVao = 0;
+    }
+  }
 
-  glBindBuffer(GL_ARRAY_BUFFER, vbo_);
-  glBufferData(
-    GL_ARRAY_BUFFER,
-    static_cast<GLsizeiptr>(cloud.points.size() * sizeof(PointVertex)),
-    cloud.points.empty() ? nullptr : cloud.points.data(),
-    GL_STATIC_DRAW);
-  glBindBuffer(GL_ARRAY_BUFFER, 0);
-
-  pointCount_ = cloud.points.size();
-  bounds_ = cloud.bounds;
+  chunks_.clear();
+  pointCount_ = 0;
+  bounds_ = {};
   error_.clear();
 }
 
-void PointCloudRenderer::Render(const OrbitCamera& camera, int viewportWidth, int viewportHeight, float pointSize) const {
+void PointCloudRenderer::Append(const PointCloudChunk& chunk) {
+  Initialize();
+
+  if (chunk.points.empty()) {
+    bounds_ = chunk.bounds;
+    return;
+  }
+
+  GpuChunk gpuChunk;
+  gpuChunk.pointCount = chunk.points.size();
+  UploadBuffer(gpuChunk.vao, gpuChunk.vbo, chunk.points);
+
+  const std::size_t interactionStride = std::max<std::size_t>(
+    1,
+    (chunk.points.size() + kTargetInteractionChunkPoints - 1) / kTargetInteractionChunkPoints);
+  if (interactionStride > 1) {
+    std::vector<PointVertex> interactionPoints;
+    interactionPoints.reserve((chunk.points.size() + interactionStride - 1) / interactionStride);
+    for (std::size_t pointIndex = 0; pointIndex < chunk.points.size(); pointIndex += interactionStride) {
+      interactionPoints.push_back(chunk.points[pointIndex]);
+    }
+
+    gpuChunk.interactionPointCount = interactionPoints.size();
+    UploadBuffer(gpuChunk.interactionVao, gpuChunk.interactionVbo, interactionPoints);
+  }
+
+  chunks_.push_back(gpuChunk);
+  pointCount_ += gpuChunk.pointCount;
+  bounds_ = chunk.bounds;
+  error_.clear();
+}
+
+void PointCloudRenderer::Render(
+  const OrbitCamera& camera,
+  int viewportWidth,
+  int viewportHeight,
+  float pointSize,
+  bool lowDetailMode) const {
   if (!initialized_ || pointCount_ == 0 || viewportWidth <= 0 || viewportHeight <= 0) {
     return;
   }
@@ -141,13 +198,18 @@ void PointCloudRenderer::Render(const OrbitCamera& camera, int viewportWidth, in
 
   glUseProgram(program_);
   const Mat4 viewProjection = camera.ViewProjection(static_cast<float>(viewportWidth) / static_cast<float>(viewportHeight));
-  const int matrixLocation = glGetUniformLocation(program_, "uViewProjection");
-  const int pointSizeLocation = glGetUniformLocation(program_, "uPointSize");
-  glUniformMatrix4fv(matrixLocation, 1, GL_FALSE, viewProjection.m);
-  glUniform1f(pointSizeLocation, pointSize);
+  glUniformMatrix4fv(viewProjectionLocation_, 1, GL_FALSE, viewProjection.m);
+  glUniform1f(pointSizeLocation_, pointSize);
 
-  glBindVertexArray(vao_);
-  glDrawArrays(GL_POINTS, 0, static_cast<GLsizei>(pointCount_));
+  for (const GpuChunk& chunk : chunks_) {
+    const unsigned int vao = lowDetailMode && chunk.interactionPointCount > 0 ? chunk.interactionVao : chunk.vao;
+    const std::size_t pointCount = lowDetailMode && chunk.interactionPointCount > 0
+      ? chunk.interactionPointCount
+      : chunk.pointCount;
+    glBindVertexArray(vao);
+    glDrawArrays(GL_POINTS, 0, static_cast<GLsizei>(pointCount));
+  }
+
   glBindVertexArray(0);
   glUseProgram(0);
 }

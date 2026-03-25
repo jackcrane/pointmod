@@ -2,10 +2,12 @@
 
 #include "PlyAsciiLoader.hpp"
 
+#include <deque>
 #include <mutex>
 #include <optional>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace pointmod {
 
@@ -24,12 +26,14 @@ class AsyncPointCloudLoader {
 
   void Start(const std::filesystem::path& path);
   [[nodiscard]] State Snapshot() const;
+  std::vector<PointCloudChunk> TakePendingChunks();
   std::optional<PointCloudData> TakeCompleted();
 
  private:
   PlyLoadOptions options_;
   mutable std::mutex mutex_;
   State state_;
+  std::deque<PointCloudChunk> pendingChunks_;
   std::optional<PointCloudData> completed_;
   std::jthread worker_;
 };

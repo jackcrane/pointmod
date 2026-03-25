@@ -2,6 +2,7 @@
 
 #include <exception>
 #include <utility>
+#include <vector>
 
 namespace pointmod {
 
@@ -24,6 +25,7 @@ void AsyncPointCloudLoader::Start(const std::filesystem::path& path) {
   {
     std::scoped_lock lock(mutex_);
     completed_.reset();
+    pendingChunks_.clear();
     state_ = State{
       .loading = true,
       .hasError = false,
@@ -35,7 +37,7 @@ void AsyncPointCloudLoader::Start(const std::filesystem::path& path) {
 
   worker_ = std::jthread([this, path](std::stop_token stopToken) {
     try {
-      PointCloudData cloud = LoadAsciiPlyPreview(
+      PointCloudData cloud = LoadAsciiPly(
         path,
         options_,
         stopToken,
@@ -46,6 +48,10 @@ void AsyncPointCloudLoader::Start(const std::filesystem::path& path) {
           state_.path = path;
           state_.message = progress.status;
           state_.progress = progress;
+        },
+        [this](PointCloudChunk&& chunk) {
+          std::scoped_lock lock(mutex_);
+          pendingChunks_.push_back(std::move(chunk));
         });
 
       std::scoped_lock lock(mutex_);
@@ -66,6 +72,17 @@ void AsyncPointCloudLoader::Start(const std::filesystem::path& path) {
 AsyncPointCloudLoader::State AsyncPointCloudLoader::Snapshot() const {
   std::scoped_lock lock(mutex_);
   return state_;
+}
+
+std::vector<PointCloudChunk> AsyncPointCloudLoader::TakePendingChunks() {
+  std::scoped_lock lock(mutex_);
+  std::vector<PointCloudChunk> result;
+  result.reserve(pendingChunks_.size());
+  while (!pendingChunks_.empty()) {
+    result.push_back(std::move(pendingChunks_.front()));
+    pendingChunks_.pop_front();
+  }
+  return result;
 }
 
 std::optional<PointCloudData> AsyncPointCloudLoader::TakeCompleted() {

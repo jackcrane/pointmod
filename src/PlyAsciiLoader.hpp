@@ -9,7 +9,8 @@
 namespace pointmod {
 
 struct PlyLoadOptions {
-  std::size_t maxPreviewPoints = 5'000'000;
+  std::uint64_t maxRenderPoints = 80'000'000;
+  std::size_t streamBatchPoints = 1'000'000;
 };
 
 struct PlyLoadProgress {
@@ -21,11 +22,13 @@ struct PlyLoadProgress {
 };
 
 using PlyLoadProgressCallback = std::function<void(const PlyLoadProgress&)>;
+using PlyPointChunkCallback = std::function<void(PointCloudChunk&&)>;
 
-PointCloudData LoadAsciiPlyPreview(
+PointCloudData LoadAsciiPly(
   const std::filesystem::path& path,
   const PlyLoadOptions& options,
   std::stop_token stopToken,
-  const PlyLoadProgressCallback& onProgress);
+  const PlyLoadProgressCallback& onProgress,
+  const PlyPointChunkCallback& onChunk);
 
 }  // namespace pointmod

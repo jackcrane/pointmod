@@ -139,7 +139,7 @@ void Application::RenderUi() {
   ImGui::SetNextWindowPos(
     ImVec2(viewport->WorkPos.x + 20.0f, viewport->WorkPos.y + 20.0f),
     ImGuiCond_Always);
-  ImGui::SetNextWindowSize(ImVec2(390.0f, 220.0f), ImGuiCond_Always);
+  ImGui::SetNextWindowSize(ImVec2(390.0f, 240.0f), ImGuiCond_Always);
   ImGui::SetNextWindowBgAlpha(0.82f);
 
   ImGuiWindowFlags flags =
@@ -161,12 +161,15 @@ void Application::RenderUi() {
     ImGui::TextWrapped("%s", statusMessage_.c_str());
     ImGui::Separator();
 
-    if (currentCloud_.previewPointCount > 0) {
+    if (currentCloud_.renderPointCount > 0) {
       const std::string fileName = currentCloud_.sourcePath.filename().string();
       ImGui::Text("File: %s", fileName.c_str());
       ImGui::Text("Source points: %llu", static_cast<unsigned long long>(currentCloud_.sourcePointCount));
-      ImGui::Text("Preview points: %llu", static_cast<unsigned long long>(currentCloud_.previewPointCount));
-      ImGui::Text("Sampled preview: %s", currentCloud_.sampledPreview ? "yes" : "no");
+      ImGui::Text("Rendered points: %llu", static_cast<unsigned long long>(currentCloud_.renderPointCount));
+      ImGui::Text("Sampling: %s", currentCloud_.sampledRender ? "enabled" : "off");
+      if (currentCloud_.sampledRender) {
+        ImGui::Text("Sampling stride: 1 / %llu", static_cast<unsigned long long>(currentCloud_.samplingStride));
+      }
     } else {
       ImGui::TextUnformatted("No point cloud loaded");
     }
@@ -178,7 +181,7 @@ void Application::RenderUi() {
         : 0.0f;
       ImGui::ProgressBar(std::clamp(progress, 0.0f, 1.0f), ImVec2(-1.0f, 0.0f), loaderState.message.c_str());
       ImGui::Text("Read: %llu points", static_cast<unsigned long long>(loaderState.progress.pointsRead));
-      ImGui::Text("Preview: %llu points", static_cast<unsigned long long>(loaderState.progress.pointsKept));
+      ImGui::Text("Rendered: %llu points", static_cast<unsigned long long>(loaderState.progress.pointsKept));
     } else if (loaderState.hasError) {
       ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.45f, 1.0f), "%s", loaderState.message.c_str());
     }
@@ -197,14 +200,35 @@ void Application::RenderScene() {
   glClearColor(0.05f, 0.07f, 0.10f, 1.0f);
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-  renderer_.Render(camera_, framebufferWidth, framebufferHeight, pointSize_);
+  const bool lowDetailMode = interactionActive_ || loader_.Snapshot().loading;
+  renderer_.Render(camera_, framebufferWidth, framebufferHeight, pointSize_, lowDetailMode);
 }
 
 void Application::UpdateCloudLoading() {
+  for (PointCloudChunk& chunk : loader_.TakePendingChunks()) {
+    renderer_.Append(chunk);
+    currentCloud_.bounds = chunk.bounds;
+    currentCloud_.sourcePointCount = chunk.sourcePointCount;
+    currentCloud_.renderPointCount = chunk.renderedPointCount;
+    currentCloud_.sampledRender = chunk.sampledRender;
+    currentCloud_.samplingStride = chunk.samplingStride;
+
+    if (!cameraFramed_ && currentCloud_.bounds.IsValid()) {
+      camera_.Frame(currentCloud_.bounds);
+      cameraFramed_ = true;
+    }
+  }
+
   if (std::optional<PointCloudData> loaded = loader_.TakeCompleted()) {
-    currentCloud_ = std::move(*loaded);
-    renderer_.Upload(currentCloud_);
-    camera_.Frame(currentCloud_.bounds);
+    currentCloud_.sourcePath = loaded->sourcePath;
+    currentCloud_.bounds = loaded->bounds;
+    currentCloud_.sourcePointCount = loaded->sourcePointCount;
+    currentCloud_.renderPointCount = loaded->renderPointCount;
+    currentCloud_.sampledRender = loaded->sampledRender;
+    currentCloud_.samplingStride = loaded->samplingStride;
+    if (!cameraTouched_ && currentCloud_.bounds.IsValid()) {
+      camera_.Frame(currentCloud_.bounds);
+    }
     statusMessage_ = "Loaded " + currentCloud_.sourcePath.filename().string();
   }
 }
@@ -244,16 +268,23 @@ void Application::HandleCameraInput() {
     StartOpenDialog();
   }
   openShortcutLatched_ = openShortcutPressed;
+  interactionActive_ = false;
 
   if (!io.WantCaptureMouse && renderer_.HasCloud()) {
     if (glfwGetMouseButton(window_, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS) {
       camera_.Rotate(deltaX, deltaY);
+      cameraTouched_ = true;
+      interactionActive_ = true;
     }
     if (glfwGetMouseButton(window_, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS) {
       camera_.Pan(deltaX, deltaY);
+      cameraTouched_ = true;
+      interactionActive_ = true;
     }
     if (pendingScrollY_ != 0.0f) {
       camera_.Zoom(pendingScrollY_);
+      cameraTouched_ = true;
+      interactionActive_ = true;
     }
   }
 
@@ -276,6 +307,12 @@ void Application::OpenPointCloud(const std::filesystem::path& path) {
     return;
   }
 
+  renderer_.Clear();
+  currentCloud_ = {};
+  currentCloud_.sourcePath = path;
+  cameraFramed_ = false;
+  cameraTouched_ = false;
+  interactionActive_ = false;
   loader_.Start(path);
   statusMessage_ = "Opening " + path.filename().string();
 }

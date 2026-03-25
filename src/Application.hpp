@@ -37,6 +37,9 @@ class Application {
   double lastCursorY_ = 0.0;
   bool firstCursorSample_ = true;
   bool openShortcutLatched_ = false;
+  bool cameraFramed_ = false;
+  bool cameraTouched_ = false;
+  bool interactionActive_ = false;
   bool glfwInitialized_ = false;
   bool imguiInitialized_ = false;
 };
