@@ -1,0 +1,33 @@
+# Build output
+/build/
+/out/
+/bin/
+/lib/
+
+# CMake
+/CMakeCache.txt
+/CMakeFiles/
+/cmake_install.cmake
+/compile_commands.json
+/CTestTestfile.cmake
+/Makefile
+/Testing/
+/.cmake/
+
+# FetchContent dependencies staged in the build tree
+/_deps/
+
+# Xcode / Apple
+/.DS_Store
+*.xcuserstate
+*.xccheckout
+*.xcscmblueprint
+xcuserdata/
+DerivedData/
+
+# Editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
