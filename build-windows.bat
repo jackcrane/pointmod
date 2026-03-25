@@ -1,8 +1,8 @@
 @echo off
 setlocal
 
-set "ROOT_DIR=%~dp0"
-if "%BUILD_DIR%"=="" set "BUILD_DIR=%ROOT_DIR%build-windows"
+for %%I in ("%~dp0.") do set "ROOT_DIR=%%~fI"
+if "%BUILD_DIR%"=="" set "BUILD_DIR=%ROOT_DIR%\build-windows"
 if "%CONFIG%"=="" set "CONFIG=Release"
 
 echo Configuring pointmod for Windows...
