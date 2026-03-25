@@ -30,12 +30,13 @@ class Application {
   PointCloudRenderer renderer_;
   OrbitCamera camera_;
   PointCloudData currentCloud_;
-  std::string statusMessage_ = "Open a .ply file from the native File menu.";
+  std::string statusMessage_ = "Open a .ply file, drag one into the window, or use the Open button.";
   float pointSize_ = 2.0f;
   float pendingScrollY_ = 0.0f;
   double lastCursorX_ = 0.0;
   double lastCursorY_ = 0.0;
   bool firstCursorSample_ = true;
+  bool openShortcutLatched_ = false;
   bool glfwInitialized_ = false;
   bool imguiInitialized_ = false;
 };

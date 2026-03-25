@@ -1,11 +1,15 @@
 cmake_minimum_required(VERSION 3.25)
 
-project(pointmod LANGUAGES CXX OBJCXX)
+project(pointmod LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+if(APPLE)
+  enable_language(OBJCXX)
+endif()
 
 option(POINTMOD_FETCH_DEPS "Fetch Dear ImGui and GLFW during CMake configure." ON)
 
@@ -58,37 +62,59 @@ if(APPLE)
   target_compile_definitions(pointmod_imgui PRIVATE GL_SILENCE_DEPRECATION)
 endif()
 
-find_library(COCOA_FRAMEWORK Cocoa REQUIRED)
-find_library(OPENGL_FRAMEWORK OpenGL REQUIRED)
-find_library(IOKIT_FRAMEWORK IOKit REQUIRED)
-find_library(COREVIDEO_FRAMEWORK CoreVideo REQUIRED)
-find_library(UNIFORMTYPEIDENTIFIERS_FRAMEWORK UniformTypeIdentifiers REQUIRED)
-
-add_executable(pointmod
-  src/main.mm
-  src/Application.cpp
-  src/AsyncPointCloudLoader.cpp
-  src/CocoaMenu.mm
-  src/FileDialog.mm
-  src/OrbitCamera.cpp
-  src/PointCloud.cpp
-  src/PlyAsciiLoader.cpp
-  src/PointCloudRenderer.cpp
+set(POINTMOD_PLATFORM_SOURCES
+  src/CocoaMenu.cpp
+  src/FileDialog.cpp
 )
 
-target_include_directories(pointmod PRIVATE src)
+set(POINTMOD_PLATFORM_LIBS "")
 
-target_compile_definitions(pointmod
-  PRIVATE
-    GL_SILENCE_DEPRECATION
-)
+if(APPLE)
+  set(POINTMOD_PLATFORM_SOURCES
+    src/CocoaMenu.mm
+    src/FileDialog.mm
+  )
 
-target_link_libraries(pointmod
-  PRIVATE
-    pointmod_imgui
+  find_library(COCOA_FRAMEWORK Cocoa REQUIRED)
+  find_library(OPENGL_FRAMEWORK OpenGL REQUIRED)
+  find_library(IOKIT_FRAMEWORK IOKit REQUIRED)
+  find_library(COREVIDEO_FRAMEWORK CoreVideo REQUIRED)
+  find_library(UNIFORMTYPEIDENTIFIERS_FRAMEWORK UniformTypeIdentifiers REQUIRED)
+
+  list(APPEND POINTMOD_PLATFORM_LIBS
     ${COCOA_FRAMEWORK}
     ${OPENGL_FRAMEWORK}
     ${IOKIT_FRAMEWORK}
     ${COREVIDEO_FRAMEWORK}
     ${UNIFORMTYPEIDENTIFIERS_FRAMEWORK}
+  )
+else()
+  find_package(OpenGL REQUIRED)
+  list(APPEND POINTMOD_PLATFORM_LIBS OpenGL::GL)
+endif()
+
+add_executable(pointmod
+  src/main.cpp
+  src/Application.cpp
+  src/AsyncPointCloudLoader.cpp
+  src/OrbitCamera.cpp
+  src/PointCloud.cpp
+  src/PlyAsciiLoader.cpp
+  src/PointCloudRenderer.cpp
+  ${POINTMOD_PLATFORM_SOURCES}
+)
+
+target_include_directories(pointmod PRIVATE src)
+
+if(APPLE)
+  target_compile_definitions(pointmod
+    PRIVATE
+      GL_SILENCE_DEPRECATION
+  )
+endif()
+
+target_link_libraries(pointmod
+  PRIVATE
+    pointmod_imgui
+    ${POINTMOD_PLATFORM_LIBS}
 )

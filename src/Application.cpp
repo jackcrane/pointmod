@@ -5,7 +5,13 @@
 #include "FileDialog.hpp"
 
 #include <GLFW/glfw3.h>
+#if defined(__APPLE__)
 #include <OpenGL/gl3.h>
+#else
+#define GL_GLEXT_PROTOTYPES
+#include <GL/gl.h>
+#include <GL/glext.h>
+#endif
 #include <imgui.h>
 #include <backends/imgui_impl_glfw.h>
 #include <backends/imgui_impl_opengl3.h>
@@ -67,6 +73,13 @@ void Application::InitializeWindow() {
       return;
     }
     app->pendingScrollY_ += static_cast<float>(yoffset);
+  });
+  glfwSetDropCallback(window_, [](GLFWwindow* window, int pathCount, const char* paths[]) {
+    auto* app = static_cast<Application*>(glfwGetWindowUserPointer(window));
+    if (app == nullptr || pathCount <= 0 || paths == nullptr) {
+      return;
+    }
+    app->OpenPointCloud(std::filesystem::path(paths[0]));
   });
 
   InstallNativeMenu([this]() { StartOpenDialog(); });
@@ -135,6 +148,16 @@ void Application::RenderUi() {
     ImGuiWindowFlags_NoCollapse;
 
   if (ImGui::Begin("Viewer", nullptr, flags)) {
+    if (ImGui::Button("Open...")) {
+      StartOpenDialog();
+    }
+    ImGui::SameLine();
+#if defined(__APPLE__)
+    ImGui::TextUnformatted("Shortcut: Cmd+O or drag and drop");
+#else
+    ImGui::TextUnformatted("Shortcut: Ctrl+O or drag and drop");
+#endif
+
     ImGui::TextWrapped("%s", statusMessage_.c_str());
     ImGui::Separator();
 
@@ -204,6 +227,24 @@ void Application::HandleCameraInput() {
   lastCursorX_ = cursorX;
   lastCursorY_ = cursorY;
 
+  const bool commandPressed =
+    glfwGetKey(window_, GLFW_KEY_LEFT_SUPER) == GLFW_PRESS ||
+    glfwGetKey(window_, GLFW_KEY_RIGHT_SUPER) == GLFW_PRESS;
+  const bool controlPressed =
+    glfwGetKey(window_, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS ||
+    glfwGetKey(window_, GLFW_KEY_RIGHT_CONTROL) == GLFW_PRESS;
+  const bool openShortcutPressed =
+#if defined(__APPLE__)
+    commandPressed && glfwGetKey(window_, GLFW_KEY_O) == GLFW_PRESS;
+#else
+    controlPressed && glfwGetKey(window_, GLFW_KEY_O) == GLFW_PRESS;
+#endif
+
+  if (openShortcutPressed && !openShortcutLatched_ && !io.WantCaptureKeyboard) {
+    StartOpenDialog();
+  }
+  openShortcutLatched_ = openShortcutPressed;
+
   if (!io.WantCaptureMouse && renderer_.HasCloud()) {
     if (glfwGetMouseButton(window_, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS) {
       camera_.Rotate(deltaX, deltaY);
@@ -227,6 +268,11 @@ void Application::StartOpenDialog() {
 
 void Application::OpenPointCloud(const std::filesystem::path& path) {
   if (path.empty()) {
+    return;
+  }
+
+  if (!std::filesystem::exists(path)) {
+    statusMessage_ = "Selected file does not exist.";
     return;
   }
 
