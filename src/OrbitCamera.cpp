@@ -24,7 +24,7 @@ void OrbitCamera::Frame(const Bounds& bounds) {
 
 void OrbitCamera::Rotate(float deltaX, float deltaY) {
   yawRadians_ -= deltaX * 0.0085f;
-  pitchRadians_ -= deltaY * 0.0085f;
+  pitchRadians_ += deltaY * 0.0085f;
   pitchRadians_ = std::clamp(pitchRadians_, -kHalfPi + 0.02f, kHalfPi - 0.02f);
 }
 
