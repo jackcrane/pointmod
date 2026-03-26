@@ -1,13 +1,18 @@
 #include "CocoaMenu.hpp"
 
 #if defined(_WIN32)
-#define GLFW_EXPOSE_NATIVE_WIN32
-#include <GLFW/glfw3native.h>
-
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+
+#define GLFW_EXPOSE_NATIVE_WIN32
+#define GLFW_NATIVE_INCLUDE_NONE
 #include <windows.h>
+#include <GLFW/glfw3.h>
+#include <GLFW/glfw3native.h>
 
 #include <unordered_map>
 #include <utility>
