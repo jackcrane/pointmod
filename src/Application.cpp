@@ -22,12 +22,196 @@ namespace {
 
 constexpr std::size_t kFullDetailPointBudget = 8'000'000;
 constexpr std::size_t kBalancedDetailPointBudget = 30'000'000;
+constexpr float kGizmoMinHalfSize = 0.001f;
+constexpr float kGizmoHitRadiusPixels = 12.0f;
+constexpr float kGizmoArrowHeadPixels = 12.0f;
+constexpr float kGizmoRotateRadiusFactor = 0.85f;
+constexpr int kGizmoCircleSegments = 48;
+constexpr float kRadiansToDegrees = 57.2957795131f;
+constexpr float kRotationDragPlaneEpsilon = 0.0001f;
+constexpr Vec3 kWorldUp = {0.0f, 0.0f, 1.0f};
+
+struct CameraRay {
+  Vec3 origin = {0.0f, 0.0f, 0.0f};
+  Vec3 direction = {0.0f, 0.0f, -1.0f};
+};
+
+float GetAxisComponent(const Vec3& value, int axisIndex) {
+  switch (axisIndex) {
+    case 0:
+      return value.x;
+    case 1:
+      return value.y;
+    default:
+      return value.z;
+  }
+}
+
+void SetAxisComponent(Vec3& value, int axisIndex, float component) {
+  switch (axisIndex) {
+    case 0:
+      value.x = component;
+      break;
+    case 1:
+      value.y = component;
+      break;
+    default:
+      value.z = component;
+      break;
+  }
+}
+
+Vec3 UnitAxis(int axisIndex) {
+  switch (axisIndex) {
+    case 0:
+      return {1.0f, 0.0f, 0.0f};
+    case 1:
+      return {0.0f, 1.0f, 0.0f};
+    default:
+      return {0.0f, 0.0f, 1.0f};
+  }
+}
+
+ImU32 AxisColor(int axisIndex, bool highlighted) {
+  switch (axisIndex) {
+    case 0:
+      return highlighted ? IM_COL32(255, 138, 128, 255) : IM_COL32(229, 57, 53, 255);
+    case 1:
+      return highlighted ? IM_COL32(165, 214, 167, 255) : IM_COL32(67, 160, 71, 255);
+    default:
+      return highlighted ? IM_COL32(144, 202, 249, 255) : IM_COL32(30, 136, 229, 255);
+  }
+}
+
+ImVec2 Add(const ImVec2& a, const ImVec2& b) {
+  return {a.x + b.x, a.y + b.y};
+}
+
+ImVec2 Subtract(const ImVec2& a, const ImVec2& b) {
+  return {a.x - b.x, a.y - b.y};
+}
+
+ImVec2 Multiply(const ImVec2& value, float scalar) {
+  return {value.x * scalar, value.y * scalar};
+}
+
+float LengthSquared(const ImVec2& value) {
+  return value.x * value.x + value.y * value.y;
+}
+
+ImVec2 Normalize2D(const ImVec2& value) {
+  const float lengthSquared = LengthSquared(value);
+  if (lengthSquared <= 0.0f) {
+    return {1.0f, 0.0f};
+  }
+  const float inverseLength = 1.0f / std::sqrt(lengthSquared);
+  return {value.x * inverseLength, value.y * inverseLength};
+}
+
+float DistanceToSegmentSquared(const ImVec2& point, const ImVec2& start, const ImVec2& end) {
+  const ImVec2 segment = Subtract(end, start);
+  const float segmentLengthSquared = LengthSquared(segment);
+  if (segmentLengthSquared <= 0.0f) {
+    return LengthSquared(Subtract(point, start));
+  }
+
+  const ImVec2 offset = Subtract(point, start);
+  const float t = (std::clamp)((offset.x * segment.x + offset.y * segment.y) / segmentLengthSquared, 0.0f, 1.0f);
+  const ImVec2 closest = Add(start, Multiply(segment, t));
+  return LengthSquared(Subtract(point, closest));
+}
+
+bool ProjectToScreen(
+  const Vec3& point,
+  const Mat4& viewProjection,
+  const ImVec2& viewportOrigin,
+  const ImVec2& viewportSize,
+  ImVec2& screenPoint) {
+  const float clipX = viewProjection.m[0] * point.x + viewProjection.m[4] * point.y + viewProjection.m[8] * point.z + viewProjection.m[12];
+  const float clipY = viewProjection.m[1] * point.x + viewProjection.m[5] * point.y + viewProjection.m[9] * point.z + viewProjection.m[13];
+  const float clipW = viewProjection.m[3] * point.x + viewProjection.m[7] * point.y + viewProjection.m[11] * point.z + viewProjection.m[15];
+  if (clipW <= 0.0001f) {
+    return false;
+  }
+
+  const float ndcX = clipX / clipW;
+  const float ndcY = clipY / clipW;
+  screenPoint = {
+    viewportOrigin.x + (ndcX * 0.5f + 0.5f) * viewportSize.x,
+    viewportOrigin.y + (1.0f - (ndcY * 0.5f + 0.5f)) * viewportSize.y,
+  };
+  return true;
+}
+
+CameraRay BuildCameraRay(
+  const OrbitCamera& camera,
+  float mouseX,
+  float mouseY,
+  float viewportWidth,
+  float viewportHeight) {
+  const float aspectRatio = viewportHeight > 0.0f ? viewportWidth / viewportHeight : 1.0f;
+  const float ndcX = viewportWidth > 0.0f ? mouseX / viewportWidth * 2.0f - 1.0f : 0.0f;
+  const float ndcY = viewportHeight > 0.0f ? 1.0f - mouseY / viewportHeight * 2.0f : 0.0f;
+  const Vec3 eye = camera.Position();
+  const Vec3 forward = Normalize(camera.Target() - eye);
+  Vec3 right = Normalize(Cross(forward, kWorldUp));
+  if (Length(right) <= 0.0f) {
+    right = {1.0f, 0.0f, 0.0f};
+  }
+  const Vec3 up = Normalize(Cross(right, forward));
+  const float tanHalfFov = std::tan(0.85f * 0.5f);
+  return CameraRay{
+    .origin = eye,
+    .direction = Normalize(
+      forward +
+      right * (ndcX * tanHalfFov * aspectRatio) +
+      up * (ndcY * tanHalfFov)),
+  };
+}
+
+bool IntersectRayPlane(const CameraRay& ray, const Vec3& planeOrigin, const Vec3& planeNormal, Vec3& hitPoint) {
+  const float denominator = Dot(ray.direction, planeNormal);
+  if (std::abs(denominator) <= 0.00001f) {
+    return false;
+  }
+
+  const float distance = Dot(planeOrigin - ray.origin, planeNormal) / denominator;
+  if (distance < 0.0f) {
+    return false;
+  }
+
+  hitPoint = ray.origin + ray.direction * distance;
+  return true;
+}
+
+Vec3 BuildPlaneNormalForAxisDrag(const Vec3& axis, const Vec3& eyeToOrigin) {
+  Vec3 planeNormal = Cross(Cross(axis, eyeToOrigin), axis);
+  if (Length(planeNormal) <= 0.00001f) {
+    planeNormal = Cross(Cross(axis, kWorldUp), axis);
+  }
+  if (Length(planeNormal) <= 0.00001f) {
+    planeNormal = Cross(Cross(axis, Vec3{0.0f, 1.0f, 0.0f}), axis);
+  }
+  return Normalize(planeNormal);
+}
+
+void BuildPlaneBasis(const Vec3& normal, Vec3& tangent, Vec3& bitangent) {
+  tangent = Normalize(Cross(std::abs(normal.z) < 0.95f ? kWorldUp : Vec3{0.0f, 1.0f, 0.0f}, normal));
+  if (Length(tangent) <= 0.00001f) {
+    tangent = {1.0f, 0.0f, 0.0f};
+  }
+  bitangent = Normalize(Cross(normal, tangent));
+}
+
+float SignedAngleRadians(const Vec3& from, const Vec3& to, const Vec3& axis) {
+  return std::atan2(Dot(axis, Cross(from, to)), Dot(from, to));
+}
 
 Vec3 ClampHalfSize(const Vec3& halfSize) {
   return {
-    (std::max)(halfSize.x, 0.001f),
-    (std::max)(halfSize.y, 0.001f),
-    (std::max)(halfSize.z, 0.001f),
+    (std::max)(halfSize.x, kGizmoMinHalfSize),
+    (std::max)(halfSize.y, kGizmoMinHalfSize),
+    (std::max)(halfSize.z, kGizmoMinHalfSize),
   };
 }
 
@@ -53,10 +237,6 @@ bool IsHiddenByAnyBox(const PointVertex& point, const std::vector<HideBox>& hide
     }
   }
   return false;
-}
-
-void TranslateHideBoxLocal(HideBox& hideBox, const Vec3& deltaLocal) {
-  hideBox.center += TransformVector(EulerRotationXYZ(hideBox.rotationDegrees), deltaLocal);
 }
 
 const char* DetailLabel(RenderDetail detail) {
@@ -120,11 +300,12 @@ int Application::Run() {
     while (!glfwWindowShouldClose(window_)) {
       glfwPollEvents();
       UpdateCloudLoading();
-      HandleCameraInput();
-      UpdateFrameStats();
 
       BeginImGuiFrame();
       RenderUi();
+      UpdateHideBoxGizmo();
+      HandleCameraInput();
+      UpdateFrameStats();
       RenderScene();
       EndImGuiFrame();
     }
@@ -339,48 +520,363 @@ void Application::RenderUi() {
         HideBox& hideBox = hideBoxes_[static_cast<std::size_t>(selectedHideBox_)];
 
         ImGui::Separator();
-        ImGui::Text("Transform gizmo: Hide box %d", selectedHideBox_ + 1);
-        ImGui::Text(
-          "Center: %.3f, %.3f, %.3f",
-          hideBox.center.x,
-          hideBox.center.y,
-          hideBox.center.z);
-
-        float moveLocal[3] = {hideBoxMoveGizmo_.x, hideBoxMoveGizmo_.y, hideBoxMoveGizmo_.z};
-        if (ImGui::DragFloat3("Move along local axes", moveLocal, (std::max)(currentCloud_.bounds.Radius() * 0.0025f, 0.0025f), -FLT_MAX, FLT_MAX, "%.3f")) {
-          const Vec3 nextMove = {moveLocal[0], moveLocal[1], moveLocal[2]};
-          TranslateHideBoxLocal(hideBox, nextMove - hideBoxMoveGizmo_);
-          hideBoxMoveGizmo_ = nextMove;
-          RebuildVisiblePointCloud();
+        ImGui::Text("Viewport gizmo: Hide box %d", selectedHideBox_ + 1);
+        int gizmoMode = static_cast<int>(hideBoxGizmoMode_);
+        if (ImGui::RadioButton("Move", gizmoMode == static_cast<int>(HideBoxGizmoMode::kMove))) {
+          hideBoxGizmoMode_ = HideBoxGizmoMode::kMove;
         }
-
-        float rotation[3] = {
+        ImGui::SameLine();
+        if (ImGui::RadioButton("Scale", gizmoMode == static_cast<int>(HideBoxGizmoMode::kScale))) {
+          hideBoxGizmoMode_ = HideBoxGizmoMode::kScale;
+        }
+        ImGui::SameLine();
+        if (ImGui::RadioButton("Rotate", gizmoMode == static_cast<int>(HideBoxGizmoMode::kRotate))) {
+          hideBoxGizmoMode_ = HideBoxGizmoMode::kRotate;
+        }
+        ImGui::Text("Center: %.3f, %.3f, %.3f", hideBox.center.x, hideBox.center.y, hideBox.center.z);
+        ImGui::Text("Size: %.3f, %.3f, %.3f", hideBox.halfSize.x * 2.0f, hideBox.halfSize.y * 2.0f, hideBox.halfSize.z * 2.0f);
+        ImGui::Text(
+          "Rotation: %.1f, %.1f, %.1f deg",
           hideBox.rotationDegrees.x,
           hideBox.rotationDegrees.y,
-          hideBox.rotationDegrees.z,
-        };
-        if (ImGui::DragFloat3("Rotation XYZ", rotation, 0.35f, -360.0f, 360.0f, "%.1f deg")) {
-          hideBox.rotationDegrees = {rotation[0], rotation[1], rotation[2]};
-          RebuildVisiblePointCloud();
-        }
-
-        float size[3] = {
-          hideBox.halfSize.x * 2.0f,
-          hideBox.halfSize.y * 2.0f,
-          hideBox.halfSize.z * 2.0f,
-        };
-        if (ImGui::DragFloat3("Scale", size, (std::max)(currentCloud_.bounds.Radius() * 0.0025f, 0.0025f), 0.002f, FLT_MAX, "%.3f")) {
-          hideBox.halfSize = ClampHalfSize({size[0] * 0.5f, size[1] * 0.5f, size[2] * 0.5f});
-          RebuildVisiblePointCloud();
-        }
-
-        if (ImGui::Button("Reset move gizmo")) {
-          ResetHideBoxGizmo();
-        }
+          hideBox.rotationDegrees.z);
+        ImGui::TextWrapped("Drag the highlighted gizmo handles on the box. Visible points update when you release the mouse.");
       }
     }
   }
   ImGui::End();
+}
+
+void Application::UpdateHideBoxGizmo() {
+  hideBoxGizmoHotAxis_ = HideBoxGizmoAxis::kNone;
+  hideBoxGizmoHovered_ = false;
+
+  ImGuiIO& io = ImGui::GetIO();
+  const ImGuiViewport* viewport = ImGui::GetMainViewport();
+  if (viewport == nullptr) {
+    ResetHideBoxGizmo();
+    return;
+  }
+
+  const ImVec2 viewportOrigin = viewport->Pos;
+  const ImVec2 viewportSize = viewport->Size;
+  if (
+    viewportSize.x <= 0.0f ||
+    viewportSize.y <= 0.0f ||
+    selectedHideBox_ < 0 ||
+    selectedHideBox_ >= static_cast<int>(hideBoxes_.size()) ||
+    !hideBoxesVisible_ ||
+    !currentCloud_.bounds.IsValid()) {
+    if (hideBoxGizmoDrag_.active && !ImGui::IsMouseDown(0) && hideBoxGizmoDrag_.dirty) {
+      RebuildVisiblePointCloud();
+    }
+    ResetHideBoxGizmo();
+    return;
+  }
+
+  auto axisEnumFromIndex = [](int axisIndex) {
+    switch (axisIndex) {
+      case 0:
+        return HideBoxGizmoAxis::kX;
+      case 1:
+        return HideBoxGizmoAxis::kY;
+      default:
+        return HideBoxGizmoAxis::kZ;
+    }
+  };
+
+  auto axisIndexFromEnum = [](HideBoxGizmoAxis axis) {
+    switch (axis) {
+      case HideBoxGizmoAxis::kX:
+        return 0;
+      case HideBoxGizmoAxis::kY:
+        return 1;
+      case HideBoxGizmoAxis::kZ:
+        return 2;
+      default:
+        return -1;
+    }
+  };
+
+  const HideBox& selectedBox = hideBoxes_[static_cast<std::size_t>(selectedHideBox_)];
+  const float distanceToBox = (std::max)(Length(selectedBox.center - camera_.Position()), 0.01f);
+  const float gizmoSize = (std::max)(currentCloud_.bounds.Radius() * 0.18f, distanceToBox * 0.20f);
+  const float rotateRadius = gizmoSize * kGizmoRotateRadiusFactor;
+  const Mat4 boxRotation = EulerRotationXYZ(selectedBox.rotationDegrees);
+  Vec3 localAxes[3] = {
+    Normalize(TransformVector(boxRotation, UnitAxis(0))),
+    Normalize(TransformVector(boxRotation, UnitAxis(1))),
+    Normalize(TransformVector(boxRotation, UnitAxis(2))),
+  };
+  const Mat4 viewProjection = camera_.ViewProjection(viewportSize.x / viewportSize.y);
+  ImDrawList* drawList = ImGui::GetBackgroundDrawList();
+  const ImVec2 mousePosition = io.MousePos;
+  const bool mouseInViewport =
+    mousePosition.x >= viewportOrigin.x &&
+    mousePosition.y >= viewportOrigin.y &&
+    mousePosition.x <= viewportOrigin.x + viewportSize.x &&
+    mousePosition.y <= viewportOrigin.y + viewportSize.y;
+
+  int hotAxisIndex = -1;
+  float bestDistanceSquared = kGizmoHitRadiusPixels * kGizmoHitRadiusPixels;
+
+  if (!hideBoxGizmoDrag_.active && mouseInViewport && !io.WantCaptureMouse) {
+    if (
+      hideBoxGizmoMode_ == HideBoxGizmoMode::kMove ||
+      hideBoxGizmoMode_ == HideBoxGizmoMode::kScale) {
+      ImVec2 centerScreen;
+      if (ProjectToScreen(selectedBox.center, viewProjection, viewportOrigin, viewportSize, centerScreen)) {
+        for (int axisIndex = 0; axisIndex < 3; ++axisIndex) {
+          ImVec2 endScreen;
+          const Vec3 endPoint = selectedBox.center + localAxes[axisIndex] * gizmoSize;
+          if (!ProjectToScreen(endPoint, viewProjection, viewportOrigin, viewportSize, endScreen)) {
+            continue;
+          }
+
+          float distanceSquared = DistanceToSegmentSquared(mousePosition, centerScreen, endScreen);
+          if (hideBoxGizmoMode_ == HideBoxGizmoMode::kScale) {
+            distanceSquared = (std::min)(distanceSquared, LengthSquared(Subtract(mousePosition, endScreen)));
+          }
+          if (distanceSquared < bestDistanceSquared) {
+            bestDistanceSquared = distanceSquared;
+            hotAxisIndex = axisIndex;
+          }
+        }
+      }
+    } else if (hideBoxGizmoMode_ == HideBoxGizmoMode::kRotate) {
+      for (int axisIndex = 0; axisIndex < 3; ++axisIndex) {
+        Vec3 tangent;
+        Vec3 bitangent;
+        BuildPlaneBasis(localAxes[axisIndex], tangent, bitangent);
+
+        for (int segmentIndex = 0; segmentIndex < kGizmoCircleSegments; ++segmentIndex) {
+          const float angleA = static_cast<float>(segmentIndex) / static_cast<float>(kGizmoCircleSegments) * 6.28318530718f;
+          const float angleB = static_cast<float>(segmentIndex + 1) / static_cast<float>(kGizmoCircleSegments) * 6.28318530718f;
+          const Vec3 pointA =
+            selectedBox.center +
+            tangent * (std::cos(angleA) * rotateRadius) +
+            bitangent * (std::sin(angleA) * rotateRadius);
+          const Vec3 pointB =
+            selectedBox.center +
+            tangent * (std::cos(angleB) * rotateRadius) +
+            bitangent * (std::sin(angleB) * rotateRadius);
+          ImVec2 screenA;
+          ImVec2 screenB;
+          if (!ProjectToScreen(pointA, viewProjection, viewportOrigin, viewportSize, screenA) ||
+              !ProjectToScreen(pointB, viewProjection, viewportOrigin, viewportSize, screenB)) {
+            continue;
+          }
+
+          const float distanceSquared = DistanceToSegmentSquared(mousePosition, screenA, screenB);
+          if (distanceSquared < bestDistanceSquared) {
+            bestDistanceSquared = distanceSquared;
+            hotAxisIndex = axisIndex;
+          }
+        }
+      }
+    }
+  }
+
+  if (!hideBoxGizmoDrag_.active && hotAxisIndex >= 0 && ImGui::IsMouseClicked(0) && mouseInViewport && !io.WantCaptureMouse) {
+    hideBoxGizmoDrag_.active = true;
+    hideBoxGizmoDrag_.dirty = false;
+    hideBoxGizmoDrag_.mode = hideBoxGizmoMode_;
+    hideBoxGizmoDrag_.axis = axisEnumFromIndex(hotAxisIndex);
+    hideBoxGizmoDrag_.boxIndex = selectedHideBox_;
+    hideBoxGizmoDrag_.startCenter = selectedBox.center;
+    hideBoxGizmoDrag_.startHalfSize = selectedBox.halfSize;
+    hideBoxGizmoDrag_.startRotationDegrees = selectedBox.rotationDegrees;
+
+    const CameraRay ray = BuildCameraRay(
+      camera_,
+      mousePosition.x - viewportOrigin.x,
+      mousePosition.y - viewportOrigin.y,
+      viewportSize.x,
+      viewportSize.y);
+    const Vec3 axisWorld = localAxes[hotAxisIndex];
+
+    if (hideBoxGizmoMode_ == HideBoxGizmoMode::kRotate) {
+      Vec3 hitPoint;
+      if (IntersectRayPlane(ray, selectedBox.center, axisWorld, hitPoint)) {
+        Vec3 projected = hitPoint - selectedBox.center;
+        projected = projected - axisWorld * Dot(projected, axisWorld);
+        if (Length(projected) > kRotationDragPlaneEpsilon) {
+          hideBoxGizmoDrag_.startPlaneVector = Normalize(projected);
+        } else {
+          Vec3 tangent;
+          Vec3 bitangent;
+          BuildPlaneBasis(axisWorld, tangent, bitangent);
+          hideBoxGizmoDrag_.startPlaneVector = tangent;
+        }
+      } else {
+        Vec3 tangent;
+        Vec3 bitangent;
+        BuildPlaneBasis(axisWorld, tangent, bitangent);
+        hideBoxGizmoDrag_.startPlaneVector = tangent;
+      }
+    } else {
+      const Vec3 planeNormal = BuildPlaneNormalForAxisDrag(axisWorld, camera_.Position() - selectedBox.center);
+      Vec3 hitPoint;
+      if (IntersectRayPlane(ray, selectedBox.center, planeNormal, hitPoint)) {
+        hideBoxGizmoDrag_.startAxisParameter = Dot(hitPoint - selectedBox.center, axisWorld);
+      } else if (hideBoxGizmoMode_ == HideBoxGizmoMode::kScale) {
+        hideBoxGizmoDrag_.startAxisParameter = GetAxisComponent(selectedBox.halfSize, hotAxisIndex);
+      } else {
+        hideBoxGizmoDrag_.startAxisParameter = 0.0f;
+      }
+    }
+  }
+
+  if (hideBoxGizmoDrag_.active) {
+    const int dragAxisIndex = axisIndexFromEnum(hideBoxGizmoDrag_.axis);
+    if (dragAxisIndex >= 0 && hideBoxGizmoDrag_.boxIndex >= 0 && hideBoxGizmoDrag_.boxIndex < static_cast<int>(hideBoxes_.size())) {
+      HideBox& dragBox = hideBoxes_[static_cast<std::size_t>(hideBoxGizmoDrag_.boxIndex)];
+      const Mat4 startRotation = EulerRotationXYZ(hideBoxGizmoDrag_.startRotationDegrees);
+      const Vec3 axisWorld = Normalize(TransformVector(startRotation, UnitAxis(dragAxisIndex)));
+
+      if (ImGui::IsMouseDown(0)) {
+        const CameraRay ray = BuildCameraRay(
+          camera_,
+          mousePosition.x - viewportOrigin.x,
+          mousePosition.y - viewportOrigin.y,
+          viewportSize.x,
+          viewportSize.y);
+
+        if (hideBoxGizmoDrag_.mode == HideBoxGizmoMode::kRotate) {
+          Vec3 hitPoint;
+          if (IntersectRayPlane(ray, hideBoxGizmoDrag_.startCenter, axisWorld, hitPoint)) {
+            Vec3 projected = hitPoint - hideBoxGizmoDrag_.startCenter;
+            projected = projected - axisWorld * Dot(projected, axisWorld);
+            if (Length(projected) > kRotationDragPlaneEpsilon) {
+              const Vec3 currentVector = Normalize(projected);
+              const float angleDegrees = SignedAngleRadians(hideBoxGizmoDrag_.startPlaneVector, currentVector, axisWorld) * kRadiansToDegrees;
+              dragBox.center = hideBoxGizmoDrag_.startCenter;
+              dragBox.halfSize = hideBoxGizmoDrag_.startHalfSize;
+              dragBox.rotationDegrees = hideBoxGizmoDrag_.startRotationDegrees;
+              SetAxisComponent(
+                dragBox.rotationDegrees,
+                dragAxisIndex,
+                GetAxisComponent(hideBoxGizmoDrag_.startRotationDegrees, dragAxisIndex) + angleDegrees);
+              hideBoxGizmoDrag_.dirty = true;
+            }
+          }
+        } else {
+          const Vec3 planeNormal = BuildPlaneNormalForAxisDrag(axisWorld, camera_.Position() - hideBoxGizmoDrag_.startCenter);
+          Vec3 hitPoint;
+          if (IntersectRayPlane(ray, hideBoxGizmoDrag_.startCenter, planeNormal, hitPoint)) {
+            const float axisParameter = Dot(hitPoint - hideBoxGizmoDrag_.startCenter, axisWorld);
+            const float delta = axisParameter - hideBoxGizmoDrag_.startAxisParameter;
+            dragBox.center = hideBoxGizmoDrag_.startCenter;
+            dragBox.halfSize = hideBoxGizmoDrag_.startHalfSize;
+            dragBox.rotationDegrees = hideBoxGizmoDrag_.startRotationDegrees;
+            if (hideBoxGizmoDrag_.mode == HideBoxGizmoMode::kMove) {
+              dragBox.center = hideBoxGizmoDrag_.startCenter + axisWorld * delta;
+            } else {
+              SetAxisComponent(
+                dragBox.halfSize,
+                dragAxisIndex,
+                (std::max)(kGizmoMinHalfSize, GetAxisComponent(hideBoxGizmoDrag_.startHalfSize, dragAxisIndex) + delta));
+            }
+            hideBoxGizmoDrag_.dirty = true;
+          }
+        }
+      } else {
+        if (hideBoxGizmoDrag_.dirty) {
+          RebuildVisiblePointCloud();
+        }
+        hideBoxGizmoDrag_.active = false;
+        hideBoxGizmoDrag_.dirty = false;
+      }
+
+      hotAxisIndex = dragAxisIndex;
+    } else {
+      ResetHideBoxGizmo();
+      return;
+    }
+  }
+
+  hideBoxGizmoHovered_ = hideBoxGizmoDrag_.active || hotAxisIndex >= 0;
+  if (hotAxisIndex >= 0) {
+    hideBoxGizmoHotAxis_ = axisEnumFromIndex(hotAxisIndex);
+  }
+
+  const HideBox& displayBox = hideBoxes_[static_cast<std::size_t>(selectedHideBox_)];
+  const Mat4 displayRotation = EulerRotationXYZ(displayBox.rotationDegrees);
+  Vec3 displayAxes[3] = {
+    Normalize(TransformVector(displayRotation, UnitAxis(0))),
+    Normalize(TransformVector(displayRotation, UnitAxis(1))),
+    Normalize(TransformVector(displayRotation, UnitAxis(2))),
+  };
+
+  ImVec2 centerScreen;
+  if (ProjectToScreen(displayBox.center, viewProjection, viewportOrigin, viewportSize, centerScreen)) {
+    drawList->AddCircleFilled(centerScreen, 5.0f, IM_COL32(230, 230, 230, 220));
+  }
+
+  if (hideBoxGizmoMode_ == HideBoxGizmoMode::kMove || hideBoxGizmoMode_ == HideBoxGizmoMode::kScale) {
+    for (int axisIndex = 0; axisIndex < 3; ++axisIndex) {
+      ImVec2 startScreen;
+      ImVec2 endScreen;
+      const Vec3 endPoint = displayBox.center + displayAxes[axisIndex] * gizmoSize;
+      if (!ProjectToScreen(displayBox.center, viewProjection, viewportOrigin, viewportSize, startScreen) ||
+          !ProjectToScreen(endPoint, viewProjection, viewportOrigin, viewportSize, endScreen)) {
+        continue;
+      }
+
+      const bool highlighted = hotAxisIndex == axisIndex;
+      const ImU32 color = AxisColor(axisIndex, highlighted);
+      const float thickness = highlighted ? 3.0f : 2.0f;
+      drawList->AddLine(startScreen, endScreen, color, thickness);
+
+      if (hideBoxGizmoMode_ == HideBoxGizmoMode::kMove) {
+        const ImVec2 direction = Normalize2D(Subtract(endScreen, startScreen));
+        const ImVec2 perpendicular = {-direction.y, direction.x};
+        const ImVec2 arrowBase = Subtract(endScreen, Multiply(direction, kGizmoArrowHeadPixels));
+        drawList->AddTriangleFilled(
+          endScreen,
+          Add(arrowBase, Multiply(perpendicular, kGizmoArrowHeadPixels * 0.45f)),
+          Add(arrowBase, Multiply(perpendicular, -kGizmoArrowHeadPixels * 0.45f)),
+          color);
+      } else {
+        const float handleRadius = highlighted ? 6.0f : 5.0f;
+        drawList->AddRectFilled(
+          {endScreen.x - handleRadius, endScreen.y - handleRadius},
+          {endScreen.x + handleRadius, endScreen.y + handleRadius},
+          color,
+          1.5f);
+      }
+    }
+  } else {
+    for (int axisIndex = 0; axisIndex < 3; ++axisIndex) {
+      Vec3 tangent;
+      Vec3 bitangent;
+      BuildPlaneBasis(displayAxes[axisIndex], tangent, bitangent);
+
+      const bool highlighted = hotAxisIndex == axisIndex;
+      const ImU32 color = AxisColor(axisIndex, highlighted);
+      const float thickness = highlighted ? 3.0f : 2.0f;
+
+      for (int segmentIndex = 0; segmentIndex < kGizmoCircleSegments; ++segmentIndex) {
+        const float angleA = static_cast<float>(segmentIndex) / static_cast<float>(kGizmoCircleSegments) * 6.28318530718f;
+        const float angleB = static_cast<float>(segmentIndex + 1) / static_cast<float>(kGizmoCircleSegments) * 6.28318530718f;
+        const Vec3 pointA =
+          displayBox.center +
+          tangent * (std::cos(angleA) * rotateRadius) +
+          bitangent * (std::sin(angleA) * rotateRadius);
+        const Vec3 pointB =
+          displayBox.center +
+          tangent * (std::cos(angleB) * rotateRadius) +
+          bitangent * (std::sin(angleB) * rotateRadius);
+        ImVec2 screenA;
+        ImVec2 screenB;
+        if (!ProjectToScreen(pointA, viewProjection, viewportOrigin, viewportSize, screenA) ||
+            !ProjectToScreen(pointB, viewProjection, viewportOrigin, viewportSize, screenB)) {
+          continue;
+        }
+        drawList->AddLine(screenA, screenB, color, thickness);
+      }
+    }
+  }
 }
 
 void Application::RenderScene() {
@@ -410,12 +906,14 @@ void Application::UpdateCloudLoading() {
     currentCloud_.renderPointCount = chunk.renderedPointCount;
     currentCloud_.sampledRender = chunk.sampledRender;
     currentCloud_.samplingStride = chunk.samplingStride;
-    visiblePointCount_ = currentCloud_.renderPointCount;
 
     if (hideBoxes_.empty()) {
+      visiblePointCount_ = currentCloud_.renderPointCount;
       renderer_.Append(chunk);
-    } else {
+    } else if (!hideBoxGizmoDrag_.active) {
       RebuildVisiblePointCloud();
+    } else {
+      visiblePointCount_ = static_cast<std::uint64_t>(renderer_.PointCount());
     }
 
     if (!cameraFramed_ && currentCloud_.bounds.IsValid()) {
@@ -508,12 +1006,16 @@ void Application::HandleCameraInput() {
   openShortcutLatched_ = openShortcutPressed;
   interactionActive_ = false;
 
+  const bool gizmoCapturingLeftMouse =
+    hideBoxGizmoDrag_.active ||
+    (hideBoxGizmoHovered_ && glfwGetMouseButton(window_, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS);
+
   if (!io.WantCaptureMouse && currentCloud_.bounds.IsValid()) {
     const bool middlePressed = glfwGetMouseButton(window_, GLFW_MOUSE_BUTTON_MIDDLE) == GLFW_PRESS;
     const bool rightPressed = glfwGetMouseButton(window_, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
     const bool panActive = middlePressed || (shiftPressed && rightPressed);
 
-    if (rightPressed && !shiftPressed) {
+    if (rightPressed && !shiftPressed && !gizmoCapturingLeftMouse) {
       camera_.Rotate(deltaX, deltaY);
       cameraTouched_ = true;
       interactionActive_ = true;
@@ -620,7 +1122,9 @@ void Application::RebuildVisiblePointCloud() {
 }
 
 void Application::ResetHideBoxGizmo() {
-  hideBoxMoveGizmo_ = {0.0f, 0.0f, 0.0f};
+  hideBoxGizmoHotAxis_ = HideBoxGizmoAxis::kNone;
+  hideBoxGizmoHovered_ = false;
+  hideBoxGizmoDrag_ = {};
 }
 
 }  // namespace pointmod

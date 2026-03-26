@@ -13,6 +13,32 @@ class Application {
   int Run();
 
  private:
+  enum class HideBoxGizmoMode {
+    kMove,
+    kScale,
+    kRotate,
+  };
+
+  enum class HideBoxGizmoAxis {
+    kNone,
+    kX,
+    kY,
+    kZ,
+  };
+
+  struct HideBoxGizmoDragState {
+    bool active = false;
+    bool dirty = false;
+    HideBoxGizmoMode mode = HideBoxGizmoMode::kMove;
+    HideBoxGizmoAxis axis = HideBoxGizmoAxis::kNone;
+    int boxIndex = -1;
+    Vec3 startCenter = {0.0f, 0.0f, 0.0f};
+    Vec3 startHalfSize = {0.5f, 0.5f, 0.5f};
+    Vec3 startRotationDegrees = {0.0f, 0.0f, 0.0f};
+    float startAxisParameter = 0.0f;
+    Vec3 startPlaneVector = {1.0f, 0.0f, 0.0f};
+  };
+
   void InitializeWindow();
   void InitializeImGui();
   void Shutdown();
@@ -20,6 +46,7 @@ class Application {
   void EndImGuiFrame();
   void RenderUi();
   void RenderScene();
+  void UpdateHideBoxGizmo();
   void UpdateCloudLoading();
   void UpdateFrameStats();
   void HandleCameraInput();
@@ -52,7 +79,10 @@ class Application {
   std::vector<HideBox> hideBoxes_;
   bool hideBoxesVisible_ = true;
   int selectedHideBox_ = -1;
-  Vec3 hideBoxMoveGizmo_ = {0.0f, 0.0f, 0.0f};
+  HideBoxGizmoMode hideBoxGizmoMode_ = HideBoxGizmoMode::kMove;
+  HideBoxGizmoAxis hideBoxGizmoHotAxis_ = HideBoxGizmoAxis::kNone;
+  bool hideBoxGizmoHovered_ = false;
+  HideBoxGizmoDragState hideBoxGizmoDrag_;
   RenderDetail activeRenderDetail_ = RenderDetail::kFull;
   bool glfwInitialized_ = false;
   bool imguiInitialized_ = false;
