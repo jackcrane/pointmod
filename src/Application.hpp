@@ -55,10 +55,12 @@ class Application {
 
   struct HoverPickCache {
     bool valid = false;
+    bool exactResolved = false;
     float mouseX = 0.0f;
     float mouseY = 0.0f;
     Vec3 cameraPosition = {0.0f, 0.0f, 0.0f};
     Vec3 cameraTarget = {0.0f, 0.0f, 0.0f};
+    double settleStartSeconds = 0.0;
   };
 
   void InitializeWindow();

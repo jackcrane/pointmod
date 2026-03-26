@@ -31,6 +31,8 @@ constexpr float kPointScaleHandleRadiusPixels = 10.0f;
 constexpr float kPointSelectionDefaultRadius = 0.1f;
 constexpr float kPointSelectionMinRadius = 0.0025f;
 constexpr std::size_t kHoverPickTargetPoints = 120'000;
+constexpr double kHoverExactSettleDelaySeconds = 0.08;
+constexpr float kPickDepthPreferenceSlack = 0.2f;
 constexpr float kRadiansToDegrees = 57.2957795131f;
 constexpr float kRotationDragPlaneEpsilon = 0.0001f;
 constexpr float kInteractionTargetFpsMin = 45.0f;
@@ -314,6 +316,7 @@ PointPickResult PickPoint(
   }
 
   const float maxDistanceSquared = hitRadiusPixels * hitRadiusPixels;
+  const float depthPreferenceSlack = maxDistanceSquared * kPickDepthPreferenceSlack;
   const Vec3 eye = camera.Position();
   for (std::size_t pointIndex = 0; pointIndex < points.size(); pointIndex += pointStep) {
     const Vec3 position = PointPosition(points[pointIndex]);
@@ -334,8 +337,8 @@ PointPickResult PickPoint(
     const float cameraDistance = Length(position - eye);
     if (
       !bestPick.hit ||
-      screenDistanceSquared < bestPick.screenDistanceSquared - 0.25f ||
-      (std::abs(screenDistanceSquared - bestPick.screenDistanceSquared) <= 0.25f && cameraDistance < bestPick.cameraDistance)) {
+      screenDistanceSquared + depthPreferenceSlack < bestPick.screenDistanceSquared ||
+      (std::abs(screenDistanceSquared - bestPick.screenDistanceSquared) <= depthPreferenceSlack && cameraDistance < bestPick.cameraDistance)) {
       bestPick.hit = true;
       bestPick.pointIndex = pointIndex;
       bestPick.screenDistanceSquared = screenDistanceSquared;
@@ -1157,6 +1160,7 @@ void Application::UpdateHideBoxGizmo() {
 void Application::UpdatePointSelectionInteraction() {
   pointScaleHandleHovered_ = false;
   pointScaleHandleHotSelection_ = -1;
+  const double now = glfwGetTime();
 
   ImGuiIO& io = ImGui::GetIO();
   const ImGuiViewport* viewport = ImGui::GetMainViewport();
@@ -1352,6 +1356,24 @@ void Application::UpdatePointSelectionInteraction() {
     hoverPickCache_.mouseY = mousePosition.y;
     hoverPickCache_.cameraPosition = cameraPosition;
     hoverPickCache_.cameraTarget = cameraTarget;
+    hoverPickCache_.settleStartSeconds = now;
+    hoverPickCache_.exactResolved = false;
+  } else if (!hoverPickCache_.exactResolved && now - hoverPickCache_.settleStartSeconds >= kHoverExactSettleDelaySeconds) {
+    const PointPickResult hoverPick = PickPoint(
+      currentCloud_.points,
+      camera_,
+      viewProjection,
+      viewportOrigin,
+      viewportSize,
+      mousePosition,
+      ComputePickRadiusPixels(pointSize_, kPointHoverPaddingPixels),
+      committedHideBoxes_,
+      1);
+    hoveredPointActive_ = hoverPick.hit;
+    if (hoverPick.hit) {
+      hoveredPointIndex_ = hoverPick.pointIndex;
+    }
+    hoverPickCache_.exactResolved = true;
   }
 
   if (!ImGui::IsMouseClicked(0)) {
