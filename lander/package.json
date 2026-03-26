@@ -1,0 +1,22 @@
+{
+  "name": "lander",
+  "version": "0.1.0",
+  "description": "",
+  "license": "MIT",
+  "scripts": {
+    "start": "vite",
+    "preview": "vite preview",
+    "build": "vite build"
+  },
+  "dependencies": {
+    "@react-three/fiber": "^9.5.0",
+    "@react-three/postprocessing": "^3.0.4",
+    "postprocessing": "^6.39.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "three": "^0.183.2"
+  },
+  "devDependencies": {
+    "vite": "^6.2.0"
+  }
+}
