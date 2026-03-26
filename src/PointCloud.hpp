@@ -23,6 +23,12 @@ struct PointVertex {
   std::uint8_t a = 255;
 };
 
+struct HideBox {
+  Vec3 center = {0.0f, 0.0f, 0.0f};
+  Vec3 rotationDegrees = {0.0f, 0.0f, 0.0f};
+  Vec3 halfSize = {0.5f, 0.5f, 0.5f};
+};
+
 struct Bounds {
   Vec3 min = {
     std::numeric_limits<float>::max(),

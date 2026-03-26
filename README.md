@@ -9,6 +9,7 @@ Current scope:
 - Progressive chunk streaming so points appear on screen while the file is still loading.
 - Chunked GPU uploads with adaptive full/balanced/interaction detail paths to keep giant clouds responsive.
 - Orbit/pan/zoom camera with a simple OpenGL point renderer.
+- Blue hide boxes that mask sampled points inside oriented box volumes, with per-box move/rotate/scale controls in the sidebar.
 
 Build on macOS/Linux:
 
@@ -35,4 +36,3 @@ Notes:
 - The loader currently supports ASCII PLY vertex clouds only.
 - The default resident render budget is `80,000,000` points; larger files are sampled with a fixed stride while streaming.
 - The UI reports FPS and the currently selected display detail level.
-

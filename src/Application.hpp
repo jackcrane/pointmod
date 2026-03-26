@@ -25,6 +25,10 @@ class Application {
   void HandleCameraInput();
   void StartOpenDialog();
   void OpenPointCloud(const std::filesystem::path& path);
+  void AddHideBox();
+  void ClearHideBoxes();
+  void RebuildVisiblePointCloud();
+  void ResetHideBoxGizmo();
 
   GLFWwindow* window_ = nullptr;
   AsyncPointCloudLoader loader_;
@@ -44,6 +48,11 @@ class Application {
   double lastFrameTimeSeconds_ = 0.0;
   float smoothedFrameMs_ = 0.0f;
   float smoothedFps_ = 0.0f;
+  std::uint64_t visiblePointCount_ = 0;
+  std::vector<HideBox> hideBoxes_;
+  bool hideBoxesVisible_ = true;
+  int selectedHideBox_ = -1;
+  Vec3 hideBoxMoveGizmo_ = {0.0f, 0.0f, 0.0f};
   RenderDetail activeRenderDetail_ = RenderDetail::kFull;
   bool glfwInitialized_ = false;
   bool imguiInitialized_ = false;

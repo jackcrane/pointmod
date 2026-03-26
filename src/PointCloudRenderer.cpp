@@ -2,6 +2,7 @@
 
 #include "OpenGL.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <stdexcept>
 #include <vector>
@@ -10,6 +11,7 @@ namespace pointmod {
 
 namespace {
 
+constexpr std::size_t kUploadChunkPoints = 1'000'000;
 constexpr std::size_t kTargetBalancedChunkPoints = 64'000;
 constexpr std::size_t kTargetInteractionChunkPoints = 16'000;
 
@@ -76,6 +78,11 @@ std::vector<PointVertex> BuildReducedPoints(const std::vector<PointVertex>& poin
   return reducedPoints;
 }
 
+void AppendBoxEdge(std::vector<PointVertex>& vertices, const Vec3& a, const Vec3& b, std::uint8_t g, std::uint8_t bChannel) {
+  vertices.push_back(PointVertex{a.x, a.y, a.z, 70, g, bChannel, 255});
+  vertices.push_back(PointVertex{b.x, b.y, b.z, 70, g, bChannel, 255});
+}
+
 }  // namespace
 
 PointCloudRenderer::~PointCloudRenderer() {
@@ -96,6 +103,14 @@ void PointCloudRenderer::Shutdown() {
 
   viewProjectionLocation_ = -1;
   pointSizeLocation_ = -1;
+  if (overlayVbo_ != 0) {
+    glDeleteBuffers(1, &overlayVbo_);
+    overlayVbo_ = 0;
+  }
+  if (overlayVao_ != 0) {
+    glDeleteVertexArrays(1, &overlayVao_);
+    overlayVao_ = 0;
+  }
   initialized_ = false;
 }
 
@@ -130,6 +145,19 @@ void PointCloudRenderer::Initialize() {
 
   viewProjectionLocation_ = glGetUniformLocation(program_, "uViewProjection");
   pointSizeLocation_ = glGetUniformLocation(program_, "uPointSize");
+
+  glGenVertexArrays(1, &overlayVao_);
+  glGenBuffers(1, &overlayVbo_);
+  glBindVertexArray(overlayVao_);
+  glBindBuffer(GL_ARRAY_BUFFER, overlayVbo_);
+  glBufferData(GL_ARRAY_BUFFER, 0, nullptr, GL_DYNAMIC_DRAW);
+  glEnableVertexAttribArray(0);
+  glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(PointVertex), reinterpret_cast<void*>(offsetof(PointVertex, x)));
+  glEnableVertexAttribArray(1);
+  glVertexAttribPointer(1, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(PointVertex), reinterpret_cast<void*>(offsetof(PointVertex, r)));
+  glBindBuffer(GL_ARRAY_BUFFER, 0);
+  glBindVertexArray(0);
+
   initialized_ = true;
 }
 
@@ -165,6 +193,24 @@ void PointCloudRenderer::Clear() {
   pointCount_ = 0;
   bounds_ = {};
   error_.clear();
+}
+
+void PointCloudRenderer::SetPointCloud(const std::vector<PointVertex>& points, const Bounds& bounds) {
+  Initialize();
+  Clear();
+  bounds_ = bounds;
+
+  if (points.empty()) {
+    return;
+  }
+
+  for (std::size_t start = 0; start < points.size(); start += kUploadChunkPoints) {
+    PointCloudChunk chunk;
+    const std::size_t count = std::min(kUploadChunkPoints, points.size() - start);
+    chunk.points.insert(chunk.points.end(), points.begin() + static_cast<std::ptrdiff_t>(start), points.begin() + static_cast<std::ptrdiff_t>(start + count));
+    chunk.bounds = bounds;
+    Append(chunk);
+  }
 }
 
 void PointCloudRenderer::Append(const PointCloudChunk& chunk) {
@@ -204,8 +250,15 @@ void PointCloudRenderer::Render(
   int viewportWidth,
   int viewportHeight,
   float pointSize,
-  RenderDetail detail) const {
-  if (!initialized_ || pointCount_ == 0 || viewportWidth <= 0 || viewportHeight <= 0) {
+  RenderDetail detail,
+  const std::vector<HideBox>& hideBoxes,
+  bool drawHideBoxes,
+  int selectedHideBox) const {
+  if (!initialized_ || viewportWidth <= 0 || viewportHeight <= 0) {
+    return;
+  }
+
+  if (pointCount_ == 0 && (!drawHideBoxes || hideBoxes.empty())) {
     return;
   }
 
@@ -218,25 +271,92 @@ void PointCloudRenderer::Render(
   glUniformMatrix4fv(viewProjectionLocation_, 1, GL_FALSE, viewProjection.m);
   glUniform1f(pointSizeLocation_, pointSize);
 
-  for (const GpuChunk& chunk : chunks_) {
-    unsigned int vao = chunk.vao;
-    std::size_t pointCount = chunk.pointCount;
-    if (detail == RenderDetail::kInteraction && chunk.interactionPointCount > 0) {
-      vao = chunk.interactionVao;
-      pointCount = chunk.interactionPointCount;
-    } else if (detail == RenderDetail::kInteraction && chunk.balancedPointCount > 0) {
-      vao = chunk.balancedVao;
-      pointCount = chunk.balancedPointCount;
-    } else if (detail == RenderDetail::kBalanced && chunk.balancedPointCount > 0) {
-      vao = chunk.balancedVao;
-      pointCount = chunk.balancedPointCount;
+  if (pointCount_ > 0) {
+    for (const GpuChunk& chunk : chunks_) {
+      unsigned int vao = chunk.vao;
+      std::size_t pointCount = chunk.pointCount;
+      if (detail == RenderDetail::kInteraction && chunk.interactionPointCount > 0) {
+        vao = chunk.interactionVao;
+        pointCount = chunk.interactionPointCount;
+      } else if (detail == RenderDetail::kInteraction && chunk.balancedPointCount > 0) {
+        vao = chunk.balancedVao;
+        pointCount = chunk.balancedPointCount;
+      } else if (detail == RenderDetail::kBalanced && chunk.balancedPointCount > 0) {
+        vao = chunk.balancedVao;
+        pointCount = chunk.balancedPointCount;
+      }
+      glBindVertexArray(vao);
+      glDrawArrays(GL_POINTS, 0, static_cast<GLsizei>(pointCount));
     }
-    glBindVertexArray(vao);
-    glDrawArrays(GL_POINTS, 0, static_cast<GLsizei>(pointCount));
+  }
+
+  if (drawHideBoxes && !hideBoxes.empty()) {
+    RenderHideBoxes(viewProjection, hideBoxes, selectedHideBox);
   }
 
   glBindVertexArray(0);
   glUseProgram(0);
+}
+
+void PointCloudRenderer::RenderHideBoxes(
+  const Mat4& viewProjection,
+  const std::vector<HideBox>& hideBoxes,
+  int selectedHideBox) const {
+  std::vector<PointVertex> lineVertices;
+  lineVertices.reserve(hideBoxes.size() * 24);
+
+  constexpr Vec3 kCornerSigns[8] = {
+    {-1.0f, -1.0f, -1.0f},
+    {1.0f, -1.0f, -1.0f},
+    {-1.0f, 1.0f, -1.0f},
+    {1.0f, 1.0f, -1.0f},
+    {-1.0f, -1.0f, 1.0f},
+    {1.0f, -1.0f, 1.0f},
+    {-1.0f, 1.0f, 1.0f},
+    {1.0f, 1.0f, 1.0f},
+  };
+  constexpr int kEdges[12][2] = {
+    {0, 1}, {0, 2}, {1, 3}, {2, 3},
+    {4, 5}, {4, 6}, {5, 7}, {6, 7},
+    {0, 4}, {1, 5}, {2, 6}, {3, 7},
+  };
+
+  for (std::size_t hideBoxIndex = 0; hideBoxIndex < hideBoxes.size(); ++hideBoxIndex) {
+    const HideBox& hideBox = hideBoxes[hideBoxIndex];
+    const Mat4 transform = Multiply(Translation(hideBox.center), EulerRotationXYZ(hideBox.rotationDegrees));
+    Vec3 corners[8];
+    for (int cornerIndex = 0; cornerIndex < 8; ++cornerIndex) {
+      corners[cornerIndex] = TransformPoint(transform, {
+        kCornerSigns[cornerIndex].x * hideBox.halfSize.x,
+        kCornerSigns[cornerIndex].y * hideBox.halfSize.y,
+        kCornerSigns[cornerIndex].z * hideBox.halfSize.z,
+      });
+    }
+
+    const bool selected = static_cast<int>(hideBoxIndex) == selectedHideBox;
+    const std::uint8_t green = selected ? 220 : 150;
+    const std::uint8_t blue = selected ? 255 : 235;
+    for (const auto& edge : kEdges) {
+      AppendBoxEdge(lineVertices, corners[edge[0]], corners[edge[1]], green, blue);
+    }
+  }
+
+  if (lineVertices.empty()) {
+    return;
+  }
+
+  glUniformMatrix4fv(viewProjectionLocation_, 1, GL_FALSE, viewProjection.m);
+  glUniform1f(pointSizeLocation_, 1.0f);
+  glBindVertexArray(overlayVao_);
+  glBindBuffer(GL_ARRAY_BUFFER, overlayVbo_);
+  glBufferData(
+    GL_ARRAY_BUFFER,
+    static_cast<GLsizeiptr>(lineVertices.size() * sizeof(PointVertex)),
+    lineVertices.data(),
+    GL_DYNAMIC_DRAW);
+  glLineWidth(2.0f);
+  glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(lineVertices.size()));
+  glBindBuffer(GL_ARRAY_BUFFER, 0);
 }
 
 bool PointCloudRenderer::HasCloud() const {

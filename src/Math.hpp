@@ -54,6 +54,10 @@ inline float Length(const Vec3& value) {
   return std::sqrt(Dot(value, value));
 }
 
+inline float DegreesToRadians(float degrees) {
+  return degrees * 0.01745329252f;
+}
+
 inline Vec3 Normalize(const Vec3& value) {
   const float length = Length(value);
   if (length <= 0.0f) {
@@ -64,6 +68,47 @@ inline Vec3 Normalize(const Vec3& value) {
 
 inline Mat4 Identity() {
   return {};
+}
+
+inline Mat4 Translation(const Vec3& value) {
+  Mat4 result = Identity();
+  result.m[12] = value.x;
+  result.m[13] = value.y;
+  result.m[14] = value.z;
+  return result;
+}
+
+inline Mat4 RotationX(float radians) {
+  Mat4 result = Identity();
+  const float cosine = std::cos(radians);
+  const float sine = std::sin(radians);
+  result.m[5] = cosine;
+  result.m[6] = sine;
+  result.m[9] = -sine;
+  result.m[10] = cosine;
+  return result;
+}
+
+inline Mat4 RotationY(float radians) {
+  Mat4 result = Identity();
+  const float cosine = std::cos(radians);
+  const float sine = std::sin(radians);
+  result.m[0] = cosine;
+  result.m[2] = -sine;
+  result.m[8] = sine;
+  result.m[10] = cosine;
+  return result;
+}
+
+inline Mat4 RotationZ(float radians) {
+  Mat4 result = Identity();
+  const float cosine = std::cos(radians);
+  const float sine = std::sin(radians);
+  result.m[0] = cosine;
+  result.m[1] = sine;
+  result.m[4] = -sine;
+  result.m[5] = cosine;
+  return result;
 }
 
 inline Mat4 Multiply(const Mat4& a, const Mat4& b) {
@@ -78,6 +123,47 @@ inline Mat4 Multiply(const Mat4& a, const Mat4& b) {
     }
   }
   return result;
+}
+
+inline Mat4 EulerRotationXYZ(const Vec3& degrees) {
+  return Multiply(
+    RotationZ(DegreesToRadians(degrees.z)),
+    Multiply(
+      RotationY(DegreesToRadians(degrees.y)),
+      RotationX(DegreesToRadians(degrees.x))));
+}
+
+inline Vec3 TransformVector(const Mat4& matrix, const Vec3& value) {
+  return {
+    matrix.m[0] * value.x + matrix.m[4] * value.y + matrix.m[8] * value.z,
+    matrix.m[1] * value.x + matrix.m[5] * value.y + matrix.m[9] * value.z,
+    matrix.m[2] * value.x + matrix.m[6] * value.y + matrix.m[10] * value.z,
+  };
+}
+
+inline Vec3 TransformPoint(const Mat4& matrix, const Vec3& value) {
+  return {
+    matrix.m[0] * value.x + matrix.m[4] * value.y + matrix.m[8] * value.z + matrix.m[12],
+    matrix.m[1] * value.x + matrix.m[5] * value.y + matrix.m[9] * value.z + matrix.m[13],
+    matrix.m[2] * value.x + matrix.m[6] * value.y + matrix.m[10] * value.z + matrix.m[14],
+  };
+}
+
+inline Vec3 InverseRotateVector(const Mat4& rotation, const Vec3& value) {
+  return {
+    rotation.m[0] * value.x + rotation.m[1] * value.y + rotation.m[2] * value.z,
+    rotation.m[4] * value.x + rotation.m[5] * value.y + rotation.m[6] * value.z,
+    rotation.m[8] * value.x + rotation.m[9] * value.y + rotation.m[10] * value.z,
+  };
+}
+
+inline bool Contains(const HideBox& box, const Vec3& point) {
+  const Mat4 rotation = EulerRotationXYZ(box.rotationDegrees);
+  const Vec3 local = InverseRotateVector(rotation, point - box.center);
+  return
+    std::abs(local.x) <= box.halfSize.x &&
+    std::abs(local.y) <= box.halfSize.y &&
+    std::abs(local.z) <= box.halfSize.z;
 }
 
 inline Mat4 Perspective(float fovRadians, float aspectRatio, float nearPlane, float farPlane) {
