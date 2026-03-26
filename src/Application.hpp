@@ -55,7 +55,7 @@ class Application {
   void OpenPointCloud(const std::filesystem::path& path);
   void AddHideBox();
   void ClearHideBoxes();
-  void RebuildVisiblePointCloud();
+  void CommitHideBoxes();
   void ResetHideBoxGizmo();
 
   GLFWwindow* window_ = nullptr;
@@ -82,7 +82,9 @@ class Application {
   float interactionPointFractionMin_ = 0.0f;
   float interactionPointFractionMax_ = 1.0f;
   std::uint64_t visiblePointCount_ = 0;
+  bool visiblePointCountAccurate_ = true;
   std::vector<HideBox> hideBoxes_;
+  std::vector<HideBox> committedHideBoxes_;
   bool hideBoxesVisible_ = true;
   int selectedHideBox_ = -1;
   HideBoxGizmoMode hideBoxGizmoMode_ = HideBoxGizmoMode::kMove;

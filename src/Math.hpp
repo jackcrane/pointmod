@@ -15,6 +15,13 @@ struct Mat4 {
   };
 };
 
+struct Quaternion {
+  float x = 0.0f;
+  float y = 0.0f;
+  float z = 0.0f;
+  float w = 1.0f;
+};
+
 inline Vec3 operator+(const Vec3& a, const Vec3& b) {
   return {a.x + b.x, a.y + b.y, a.z + b.z};
 }
@@ -131,6 +138,34 @@ inline Mat4 EulerRotationXYZ(const Vec3& degrees) {
     Multiply(
       RotationY(DegreesToRadians(degrees.y)),
       RotationX(DegreesToRadians(degrees.x))));
+}
+
+inline Quaternion Normalize(const Quaternion& value) {
+  const float length = std::sqrt(value.x * value.x + value.y * value.y + value.z * value.z + value.w * value.w);
+  if (length <= 0.0f) {
+    return {};
+  }
+  return {value.x / length, value.y / length, value.z / length, value.w / length};
+}
+
+inline Quaternion QuaternionFromEulerXYZ(const Vec3& degrees) {
+  const float halfX = DegreesToRadians(degrees.x) * 0.5f;
+  const float halfY = DegreesToRadians(degrees.y) * 0.5f;
+  const float halfZ = DegreesToRadians(degrees.z) * 0.5f;
+
+  const float cx = std::cos(halfX);
+  const float sx = std::sin(halfX);
+  const float cy = std::cos(halfY);
+  const float sy = std::sin(halfY);
+  const float cz = std::cos(halfZ);
+  const float sz = std::sin(halfZ);
+
+  return Normalize({
+    sx * cy * cz - cx * sy * sz,
+    cx * sy * cz + sx * cy * sz,
+    cx * cy * sz - sx * sy * cz,
+    cx * cy * cz + sx * sy * sz,
+  });
 }
 
 inline Vec3 TransformVector(const Mat4& matrix, const Vec3& value) {

@@ -13,6 +13,7 @@ namespace pointmod {
 namespace {
 
 constexpr std::size_t kUploadChunkPoints = 1'000'000;
+constexpr int kHideBoxTextureWidth = 3;
 
 constexpr const char* kVertexShaderSource = R"(
 #version 150 core
@@ -21,22 +22,57 @@ in vec4 aColor;
 
 uniform mat4 uViewProjection;
 uniform float uPointSize;
+uniform int uHideBoxCount;
+uniform sampler2D uHideBoxTexture;
 
 out vec4 vColor;
+flat out int vHidden;
+
+vec4 QuaternionConjugate(vec4 q) {
+  return vec4(-q.xyz, q.w);
+}
+
+vec3 RotateByQuaternion(vec3 value, vec4 q) {
+  vec3 t = 2.0 * cross(q.xyz, value);
+  return value + q.w * t + cross(q.xyz, t);
+}
 
 void main() {
   gl_Position = uViewProjection * vec4(aPosition, 1.0);
   gl_PointSize = uPointSize;
   vColor = aColor;
+  vHidden = 0;
+
+  for (int hideBoxIndex = 0; hideBoxIndex < uHideBoxCount; ++hideBoxIndex) {
+    vec4 packed0 = texelFetch(uHideBoxTexture, ivec2(0, hideBoxIndex), 0);
+    vec4 packed1 = texelFetch(uHideBoxTexture, ivec2(1, hideBoxIndex), 0);
+    vec4 packed2 = texelFetch(uHideBoxTexture, ivec2(2, hideBoxIndex), 0);
+
+    vec3 center = packed0.xyz;
+    vec3 halfSize = vec3(packed0.w, packed1.xy);
+    vec4 quaternion = normalize(vec4(packed1.z, packed2.xyz));
+    vec3 local = RotateByQuaternion(aPosition - center, QuaternionConjugate(quaternion));
+    if (
+      abs(local.x) <= halfSize.x &&
+      abs(local.y) <= halfSize.y &&
+      abs(local.z) <= halfSize.z) {
+      vHidden = 1;
+      break;
+    }
+  }
 }
 )";
 
 constexpr const char* kFragmentShaderSource = R"(
 #version 150 core
 in vec4 vColor;
+flat in int vHidden;
 out vec4 fragColor;
 
 void main() {
+  if (vHidden != 0) {
+    discard;
+  }
   fragColor = vColor;
 }
 )";
@@ -134,6 +170,13 @@ void PointCloudRenderer::Shutdown() {
 
   viewProjectionLocation_ = -1;
   pointSizeLocation_ = -1;
+  hideBoxCountLocation_ = -1;
+  hideBoxTextureLocation_ = -1;
+  hideBoxCount_ = 0;
+  if (hideBoxTexture_ != 0) {
+    glDeleteTextures(1, &hideBoxTexture_);
+    hideBoxTexture_ = 0;
+  }
   if (overlayVbo_ != 0) {
     glDeleteBuffers(1, &overlayVbo_);
     overlayVbo_ = 0;
@@ -176,6 +219,18 @@ void PointCloudRenderer::Initialize() {
 
   viewProjectionLocation_ = glGetUniformLocation(program_, "uViewProjection");
   pointSizeLocation_ = glGetUniformLocation(program_, "uPointSize");
+  hideBoxCountLocation_ = glGetUniformLocation(program_, "uHideBoxCount");
+  hideBoxTextureLocation_ = glGetUniformLocation(program_, "uHideBoxTexture");
+
+  glGenTextures(1, &hideBoxTexture_);
+  glBindTexture(GL_TEXTURE_2D, hideBoxTexture_);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+  const float zeroData[kHideBoxTextureWidth * 4] = {};
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, kHideBoxTextureWidth, 1, 0, GL_RGBA, GL_FLOAT, zeroData);
+  glBindTexture(GL_TEXTURE_2D, 0);
 
   glGenVertexArrays(1, &overlayVao_);
   glGenBuffers(1, &overlayVbo_);
@@ -190,6 +245,43 @@ void PointCloudRenderer::Initialize() {
   glBindVertexArray(0);
 
   initialized_ = true;
+}
+
+void PointCloudRenderer::SetHideBoxes(const std::vector<HideBox>& hideBoxes) {
+  Initialize();
+
+  hideBoxCount_ = static_cast<int>(hideBoxes.size());
+  std::vector<float> textureData(static_cast<std::size_t>((std::max)(hideBoxCount_, 1)) * kHideBoxTextureWidth * 4, 0.0f);
+  for (std::size_t hideBoxIndex = 0; hideBoxIndex < hideBoxes.size(); ++hideBoxIndex) {
+    const HideBox& hideBox = hideBoxes[hideBoxIndex];
+    const Quaternion quaternion = QuaternionFromEulerXYZ(hideBox.rotationDegrees);
+    const std::size_t base = hideBoxIndex * kHideBoxTextureWidth * 4;
+    textureData[base + 0] = hideBox.center.x;
+    textureData[base + 1] = hideBox.center.y;
+    textureData[base + 2] = hideBox.center.z;
+    textureData[base + 3] = hideBox.halfSize.x;
+    textureData[base + 4] = hideBox.halfSize.y;
+    textureData[base + 5] = hideBox.halfSize.z;
+    textureData[base + 6] = quaternion.x;
+    textureData[base + 7] = 0.0f;
+    textureData[base + 8] = quaternion.y;
+    textureData[base + 9] = quaternion.z;
+    textureData[base + 10] = quaternion.w;
+    textureData[base + 11] = 0.0f;
+  }
+
+  glBindTexture(GL_TEXTURE_2D, hideBoxTexture_);
+  glTexImage2D(
+    GL_TEXTURE_2D,
+    0,
+    GL_RGBA32F,
+    kHideBoxTextureWidth,
+    (std::max)(hideBoxCount_, 1),
+    0,
+    GL_RGBA,
+    GL_FLOAT,
+    textureData.data());
+  glBindTexture(GL_TEXTURE_2D, 0);
 }
 
 void PointCloudRenderer::Clear() {
@@ -254,14 +346,14 @@ void PointCloudRenderer::Render(
   float pointSize,
   RenderDetail detail,
   float interactionPointFraction,
-  const std::vector<HideBox>& hideBoxes,
+  const std::vector<HideBox>& displayHideBoxes,
   bool drawHideBoxes,
   int selectedHideBox) const {
   if (!initialized_ || viewportWidth <= 0 || viewportHeight <= 0) {
     return;
   }
 
-  if (pointCount_ == 0 && (!drawHideBoxes || hideBoxes.empty())) {
+  if (pointCount_ == 0 && (!drawHideBoxes || displayHideBoxes.empty())) {
     return;
   }
 
@@ -273,6 +365,10 @@ void PointCloudRenderer::Render(
   const Mat4 viewProjection = camera.ViewProjection(static_cast<float>(viewportWidth) / static_cast<float>(viewportHeight));
   glUniformMatrix4fv(viewProjectionLocation_, 1, GL_FALSE, viewProjection.m);
   glUniform1f(pointSizeLocation_, pointSize);
+  glUniform1i(hideBoxCountLocation_, hideBoxCount_);
+  glActiveTexture(GL_TEXTURE0);
+  glBindTexture(GL_TEXTURE_2D, hideBoxTexture_);
+  glUniform1i(hideBoxTextureLocation_, 0);
 
   if (pointCount_ > 0) {
     for (const GpuChunk& chunk : chunks_) {
@@ -288,10 +384,11 @@ void PointCloudRenderer::Render(
     }
   }
 
-  if (drawHideBoxes && !hideBoxes.empty()) {
-    RenderHideBoxes(viewProjection, hideBoxes, selectedHideBox);
+  if (drawHideBoxes && !displayHideBoxes.empty()) {
+    RenderHideBoxes(viewProjection, displayHideBoxes, selectedHideBox);
   }
 
+  glBindTexture(GL_TEXTURE_2D, 0);
   glBindVertexArray(0);
   glUseProgram(0);
 }

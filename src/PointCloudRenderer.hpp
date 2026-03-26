@@ -24,6 +24,7 @@ class PointCloudRenderer {
   void Clear();
   void Append(const PointCloudChunk& chunk);
   void SetPointCloud(const std::vector<PointVertex>& points, const Bounds& bounds);
+  void SetHideBoxes(const std::vector<HideBox>& hideBoxes);
   void Render(
     const OrbitCamera& camera,
     int viewportWidth,
@@ -31,7 +32,7 @@ class PointCloudRenderer {
     float pointSize,
     RenderDetail detail,
     float interactionPointFraction,
-    const std::vector<HideBox>& hideBoxes,
+    const std::vector<HideBox>& displayHideBoxes,
     bool drawHideBoxes,
     int selectedHideBox) const;
 
@@ -57,6 +58,10 @@ class PointCloudRenderer {
   unsigned int program_ = 0;
   int viewProjectionLocation_ = -1;
   int pointSizeLocation_ = -1;
+  int hideBoxCountLocation_ = -1;
+  int hideBoxTextureLocation_ = -1;
+  unsigned int hideBoxTexture_ = 0;
+  int hideBoxCount_ = 0;
   unsigned int overlayVao_ = 0;
   unsigned int overlayVbo_ = 0;
   std::vector<GpuChunk> chunks_;

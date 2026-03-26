@@ -233,16 +233,6 @@ HideBox MakeDefaultHideBox(const Bounds& bounds, const OrbitCamera& camera) {
   };
 }
 
-bool IsHiddenByAnyBox(const PointVertex& point, const std::vector<HideBox>& hideBoxes) {
-  const Vec3 position = {point.x, point.y, point.z};
-  for (const HideBox& hideBox : hideBoxes) {
-    if (Contains(hideBox, position)) {
-      return true;
-    }
-  }
-  return false;
-}
-
 const char* DetailLabel(RenderDetail detail) {
   switch (detail) {
     case RenderDetail::kFull:
@@ -442,7 +432,11 @@ void Application::RenderUi() {
       ImGui::Text("File: %s", fileName.c_str());
       ImGui::Text("Source points: %llu", static_cast<unsigned long long>(currentCloud_.sourcePointCount));
       ImGui::Text("Sampled points: %llu", static_cast<unsigned long long>(currentCloud_.renderPointCount));
-      ImGui::Text("Visible points: %llu", static_cast<unsigned long long>(visiblePointCount_));
+      if (visiblePointCountAccurate_) {
+        ImGui::Text("Visible points: %llu", static_cast<unsigned long long>(visiblePointCount_));
+      } else {
+        ImGui::TextUnformatted("Visible points: filtered on GPU");
+      }
       ImGui::Text("Sampling: %s", currentCloud_.sampledRender ? "enabled" : "off");
       if (currentCloud_.sampledRender) {
         ImGui::Text("Sampling stride: 1 / %llu", static_cast<unsigned long long>(currentCloud_.samplingStride));
@@ -542,7 +536,7 @@ void Application::UpdateHideBoxGizmo() {
     !hideBoxesVisible_ ||
     !currentCloud_.bounds.IsValid()) {
     if (hideBoxGizmoDrag_.active && !ImGui::IsMouseDown(0) && hideBoxGizmoDrag_.dirty) {
-      RebuildVisiblePointCloud();
+      CommitHideBoxes();
     }
     ResetHideBoxGizmo();
     return;
@@ -756,7 +750,7 @@ void Application::UpdateHideBoxGizmo() {
         }
       } else {
         if (hideBoxGizmoDrag_.dirty) {
-          RebuildVisiblePointCloud();
+          CommitHideBoxes();
         }
         hideBoxGizmoDrag_.active = false;
         hideBoxGizmoDrag_.dirty = false;
@@ -882,14 +876,13 @@ void Application::UpdateCloudLoading() {
     currentCloud_.sampledRender = chunk.sampledRender;
     currentCloud_.samplingStride = chunk.samplingStride;
 
-    if (hideBoxes_.empty()) {
+    if (committedHideBoxes_.empty()) {
       visiblePointCount_ = currentCloud_.renderPointCount;
-      renderer_.Append(chunk);
-    } else if (!hideBoxGizmoDrag_.active) {
-      RebuildVisiblePointCloud();
+      visiblePointCountAccurate_ = true;
     } else {
-      visiblePointCount_ = static_cast<std::uint64_t>(renderer_.PointCount());
+      visiblePointCountAccurate_ = false;
     }
+    renderer_.Append(chunk);
 
     if (!cameraFramed_ && currentCloud_.bounds.IsValid()) {
       camera_.Frame(currentCloud_.bounds);
@@ -904,7 +897,12 @@ void Application::UpdateCloudLoading() {
     currentCloud_.renderPointCount = loaded->renderPointCount;
     currentCloud_.sampledRender = loaded->sampledRender;
     currentCloud_.samplingStride = loaded->samplingStride;
-    visiblePointCount_ = hideBoxes_.empty() ? currentCloud_.renderPointCount : visiblePointCount_;
+    if (committedHideBoxes_.empty()) {
+      visiblePointCount_ = currentCloud_.renderPointCount;
+      visiblePointCountAccurate_ = true;
+    } else {
+      visiblePointCountAccurate_ = false;
+    }
     if (!cameraTouched_ && currentCloud_.bounds.IsValid()) {
       camera_.Frame(currentCloud_.bounds);
     }
@@ -1076,9 +1074,12 @@ void Application::OpenPointCloud(const std::filesystem::path& path) {
   }
 
   renderer_.Clear();
+  renderer_.SetHideBoxes({});
   currentCloud_ = {};
   visiblePointCount_ = 0;
+  visiblePointCountAccurate_ = true;
   hideBoxes_.clear();
+  committedHideBoxes_.clear();
   hideBoxesVisible_ = true;
   selectedHideBox_ = -1;
   ResetHideBoxGizmo();
@@ -1104,7 +1105,7 @@ void Application::AddHideBox() {
   selectedHideBox_ = static_cast<int>(hideBoxes_.size()) - 1;
   hideBoxesVisible_ = true;
   ResetHideBoxGizmo();
-  RebuildVisiblePointCloud();
+  CommitHideBoxes();
 }
 
 void Application::ClearHideBoxes() {
@@ -1115,38 +1116,18 @@ void Application::ClearHideBoxes() {
   hideBoxes_.clear();
   selectedHideBox_ = -1;
   ResetHideBoxGizmo();
-  RebuildVisiblePointCloud();
+  CommitHideBoxes();
 }
 
-void Application::RebuildVisiblePointCloud() {
-  if (!currentCloud_.bounds.IsValid()) {
-    renderer_.Clear();
-    visiblePointCount_ = 0;
-    return;
-  }
-
-  if (currentCloud_.points.empty()) {
-    renderer_.Clear();
-    visiblePointCount_ = 0;
-    return;
-  }
-
-  if (hideBoxes_.empty()) {
+void Application::CommitHideBoxes() {
+  committedHideBoxes_ = hideBoxes_;
+  renderer_.SetHideBoxes(committedHideBoxes_);
+  if (committedHideBoxes_.empty()) {
     visiblePointCount_ = static_cast<std::uint64_t>(currentCloud_.points.size());
-    renderer_.SetPointCloud(currentCloud_.points, currentCloud_.bounds);
-    return;
+    visiblePointCountAccurate_ = true;
+  } else {
+    visiblePointCountAccurate_ = false;
   }
-
-  std::vector<PointVertex> visiblePoints;
-  visiblePoints.reserve(currentCloud_.points.size());
-  for (const PointVertex& point : currentCloud_.points) {
-    if (!IsHiddenByAnyBox(point, hideBoxes_)) {
-      visiblePoints.push_back(point);
-    }
-  }
-
-  visiblePointCount_ = static_cast<std::uint64_t>(visiblePoints.size());
-  renderer_.SetPointCloud(visiblePoints, currentCloud_.bounds);
 }
 
 void Application::ResetHideBoxGizmo() {
