@@ -30,8 +30,8 @@ constexpr int kGizmoCircleSegments = 48;
 constexpr float kPointHoverPaddingPixels = 12.0f;
 constexpr float kPointClickPaddingPixels = 14.0f;
 constexpr float kPointScaleHandleRadiusPixels = 10.0f;
-constexpr float kFreeformDragStartPixels = 6.0f;
-constexpr float kFreeformPathSamplePixels = 4.0f;
+constexpr float kFreeformDragStartPixels = 2.0f;
+constexpr float kFreeformPathSamplePixels = 1.0f;
 constexpr float kFreeformStrokeThickness = 1.0f;
 constexpr float kPointSelectionDefaultRadius = 0.05f;
 constexpr float kPointSelectionMinRadius = 0.0025f;
@@ -209,23 +209,35 @@ std::vector<ImVec2> FinalizeFreeformPolygon(const std::vector<ImVec2>& path) {
     polygon.clear();
     return polygon;
   }
+  return polygon;
+}
 
-  std::vector<ImVec2> simplified;
-  simplified.reserve(polygon.size());
-  for (std::size_t index = 0; index < polygon.size(); ++index) {
-    const ImVec2& previous = polygon[(index + polygon.size() - 1) % polygon.size()];
-    const ImVec2& current = polygon[index];
-    const ImVec2& next = polygon[(index + 1) % polygon.size()];
-    if (std::abs(Cross2D(previous, current, next)) <= 0.5f) {
-      continue;
-    }
-    simplified.push_back(current);
+void AppendFreeformPathPoint(std::vector<ImVec2>& path, const ImVec2& point) {
+  if (path.empty()) {
+    path.push_back(point);
+    return;
   }
 
-  if (simplified.size() < 3) {
-    simplified = polygon;
+  ImVec2 lastPoint = path.back();
+  const ImVec2 delta = Subtract(point, lastPoint);
+  const float distance = std::sqrt(LengthSquared(delta));
+  if (distance <= 0.0f) {
+    path.back() = point;
+    return;
   }
-  return simplified;
+
+  if (distance < kFreeformPathSamplePixels) {
+    path.back() = point;
+    return;
+  }
+
+  const ImVec2 direction = Multiply(delta, 1.0f / distance);
+  float traveled = kFreeformPathSamplePixels;
+  while (traveled < distance) {
+    path.push_back(Add(lastPoint, Multiply(direction, traveled)));
+    traveled += kFreeformPathSamplePixels;
+  }
+  path.push_back(point);
 }
 
 bool TriangulateScreenPolygon(const std::vector<ImVec2>& polygon, std::vector<int>& triangleIndices) {
@@ -1953,16 +1965,10 @@ void Application::UpdatePointSelectionInteraction() {
       dragDistanceSquared >= kFreeformDragStartPixels * kFreeformDragStartPixels) {
       freeformSelection_.active = true;
       freeformSelection_.path.clear();
-      freeformSelection_.path.push_back(freeformSelection_.pressPosition);
-      freeformSelection_.path.push_back(mousePosition);
+      AppendFreeformPathPoint(freeformSelection_.path, freeformSelection_.pressPosition);
+      AppendFreeformPathPoint(freeformSelection_.path, mousePosition);
     } else if (freeformSelection_.active) {
-      if (
-        freeformSelection_.path.empty() ||
-        DistanceSquared(freeformSelection_.path.back(), mousePosition) >= kFreeformPathSamplePixels * kFreeformPathSamplePixels) {
-        freeformSelection_.path.push_back(mousePosition);
-      } else {
-        freeformSelection_.path.back() = mousePosition;
-      }
+      AppendFreeformPathPoint(freeformSelection_.path, mousePosition);
     }
 
     drawScaleHandles();
