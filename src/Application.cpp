@@ -20,8 +20,6 @@ namespace pointmod {
 
 namespace {
 
-constexpr std::size_t kFullDetailPointBudget = 8'000'000;
-constexpr std::size_t kBalancedDetailPointBudget = 30'000'000;
 constexpr float kGizmoMinHalfSize = 0.001f;
 constexpr float kGizmoHitRadiusPixels = 12.0f;
 constexpr float kGizmoArrowHeadPixels = 12.0f;
@@ -257,33 +255,13 @@ RenderDetail ChooseRenderDetail(
   bool loading,
   bool interactionActive,
   float smoothedFps) {
-  if (interactionActive || loading) {
+  static_cast<void>(currentDetail);
+  static_cast<void>(residentPointCount);
+  static_cast<void>(loading);
+  static_cast<void>(smoothedFps);
+
+  if (interactionActive) {
     return RenderDetail::kInteraction;
-  }
-
-  if (residentPointCount > kBalancedDetailPointBudget) {
-    return RenderDetail::kBalanced;
-  }
-
-  if (currentDetail == RenderDetail::kInteraction) {
-    if (residentPointCount > kFullDetailPointBudget) {
-      return RenderDetail::kBalanced;
-    }
-    return smoothedFps >= 40.0f ? RenderDetail::kFull : RenderDetail::kBalanced;
-  }
-
-  if (currentDetail == RenderDetail::kBalanced) {
-    if (smoothedFps > 50.0f && residentPointCount <= kFullDetailPointBudget) {
-      return RenderDetail::kFull;
-    }
-    if (smoothedFps > 0.0f && smoothedFps < 20.0f) {
-      return RenderDetail::kInteraction;
-    }
-    return RenderDetail::kBalanced;
-  }
-
-  if (residentPointCount > kFullDetailPointBudget || (smoothedFps > 0.0f && smoothedFps < 32.0f)) {
-    return RenderDetail::kBalanced;
   }
 
   return RenderDetail::kFull;
