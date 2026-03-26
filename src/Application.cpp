@@ -28,7 +28,7 @@ constexpr int kGizmoCircleSegments = 48;
 constexpr float kPointHoverPaddingPixels = 12.0f;
 constexpr float kPointClickPaddingPixels = 14.0f;
 constexpr float kPointScaleHandleRadiusPixels = 10.0f;
-constexpr float kPointSelectionDefaultRadius = 0.1f;
+constexpr float kPointSelectionDefaultRadius = 0.05f;
 constexpr float kPointSelectionMinRadius = 0.0025f;
 constexpr std::size_t kHoverPickTargetPoints = 120'000;
 constexpr double kHoverExactSettleDelaySeconds = 0.08;
@@ -1413,7 +1413,7 @@ void Application::UpdatePointSelectionInteraction() {
 
   pointSelections_.push_back(PointSelection{
     .pointIndex = clickPick.pointIndex,
-    .radius = kPointSelectionDefaultRadius,
+    .radius = pointSelections_.empty() ? kPointSelectionDefaultRadius : pointSelections_.back().radius,
   });
   activePointSelection_ = static_cast<int>(pointSelections_.size()) - 1;
   drawScaleHandles();
