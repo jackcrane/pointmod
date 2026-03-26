@@ -34,6 +34,7 @@ constexpr std::size_t kHoverPickTargetPoints = 120'000;
 constexpr double kHoverExactSettleDelaySeconds = 0.08;
 constexpr float kHoverRequeryDistancePixels = 2.0f;
 constexpr float kPickDepthPreferenceSlack = 0.2f;
+constexpr float kPointContextHitPaddingPixels = 6.0f;
 constexpr float kRadiansToDegrees = 57.2957795131f;
 constexpr float kRotationDragPlaneEpsilon = 0.0001f;
 constexpr float kInteractionTargetFpsMin = 45.0f;
@@ -777,7 +778,7 @@ void Application::RenderUi() {
         depthCurveDragValue_);
       ImGui::TextWrapped("Drag across the graph to remap brightness from near to far camera distance.");
     }
-    ImGui::TextWrapped("Controls: left click a point to add a red sphere, drag its red square grip to resize, right drag orbit, middle drag or Shift+right drag pan, wheel zoom.");
+    ImGui::TextWrapped("Controls: left click a point to add a red sphere, drag its red square grip to resize, right click a sphere to delete it, right drag orbit, middle drag or Shift+right drag pan, wheel zoom.");
 
     if (hasHideBoxes) {
       ImGui::Separator();
@@ -826,6 +827,26 @@ void Application::RenderUi() {
     }
   }
   ImGui::End();
+
+  if (pointContextMenuOpenRequested_) {
+    ImGui::OpenPopup("PointSphereContextMenu");
+    pointContextMenuOpenRequested_ = false;
+  }
+  ImGui::SetNextWindowPos({pointContextMenuMouseX_, pointContextMenuMouseY_}, ImGuiCond_Appearing);
+  if (ImGui::BeginPopup("PointSphereContextMenu")) {
+    const bool validSelection =
+      pointContextMenuSelection_ >= 0 &&
+      pointContextMenuSelection_ < static_cast<int>(pointSelections_.size());
+    if (!validSelection) {
+      pointContextMenuSelection_ = -1;
+      ImGui::CloseCurrentPopup();
+    } else if (ImGui::MenuItem("Delete point sphere")) {
+      DeletePointSelection(pointContextMenuSelection_);
+      pointContextMenuSelection_ = -1;
+      ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+  }
 }
 
 void Application::UpdateHideBoxGizmo() {
@@ -1197,6 +1218,60 @@ void Application::UpdatePointSelectionInteraction() {
     return PointPosition(currentCloud_.points[pointIndex]);
   };
 
+  auto hitTestPointSphere = [&](const Mat4& viewProjection, int& hitSelectionIndex) {
+    hitSelectionIndex = -1;
+    Vec3 forward;
+    Vec3 right;
+    Vec3 up;
+    BuildCameraBasis(camera_, forward, right, up);
+    const Vec3 eye = camera_.Position();
+    float bestDistanceSquared = FLT_MAX;
+    float bestCameraDistance = FLT_MAX;
+
+    for (std::size_t selectionIndex = 0; selectionIndex < pointSelections_.size(); ++selectionIndex) {
+      const PointSelection& selection = pointSelections_[selectionIndex];
+      if (selection.pointIndex >= currentCloud_.points.size()) {
+        continue;
+      }
+
+      const Vec3 center = pointPositionAt(selection.pointIndex);
+      if (IsPointHidden(center, committedHideBoxes_)) {
+        continue;
+      }
+
+      ImVec2 centerScreen;
+      ImVec2 radiusScreenA;
+      ImVec2 radiusScreenB;
+      if (
+        !ProjectToScreen(center, viewProjection, viewportOrigin, viewportSize, centerScreen) ||
+        !ProjectToScreen(center + right * selection.radius, viewProjection, viewportOrigin, viewportSize, radiusScreenA) ||
+        !ProjectToScreen(center + up * selection.radius, viewProjection, viewportOrigin, viewportSize, radiusScreenB)) {
+        continue;
+      }
+
+      const float screenRadius = (std::max)(
+        std::sqrt(DistanceSquared(centerScreen, radiusScreenA)),
+        std::sqrt(DistanceSquared(centerScreen, radiusScreenB)));
+      const float hitRadius = screenRadius + kPointContextHitPaddingPixels;
+      const float distanceSquared = DistanceSquared(mousePosition, centerScreen);
+      if (distanceSquared > hitRadius * hitRadius) {
+        continue;
+      }
+
+      const float cameraDistance = Length(center - eye);
+      if (
+        hitSelectionIndex < 0 ||
+        distanceSquared < bestDistanceSquared - 0.25f ||
+        (std::abs(distanceSquared - bestDistanceSquared) <= 0.25f && cameraDistance < bestCameraDistance)) {
+        hitSelectionIndex = static_cast<int>(selectionIndex);
+        bestDistanceSquared = distanceSquared;
+        bestCameraDistance = cameraDistance;
+      }
+    }
+
+    return hitSelectionIndex >= 0;
+  };
+
   auto drawScaleHandles = [&]() {
     const Mat4 viewProjection = camera_.ViewProjection(viewportSize.x / viewportSize.y);
     const Vec3 handleDirection = BuildScaleHandleDirection(camera_);
@@ -1307,6 +1382,22 @@ void Application::UpdatePointSelectionInteraction() {
       bestHandleDistanceSquared = distanceSquared;
       pointScaleHandleHovered_ = true;
       pointScaleHandleHotSelection_ = static_cast<int>(selectionIndex);
+    }
+  }
+
+  if (ImGui::IsMouseClicked(1)) {
+    int contextSelectionIndex = -1;
+    if (hitTestPointSphere(viewProjection, contextSelectionIndex)) {
+      pointContextMenuSelection_ = contextSelectionIndex;
+      activePointSelection_ = contextSelectionIndex;
+      pointContextMenuMouseX_ = mousePosition.x;
+      pointContextMenuMouseY_ = mousePosition.y;
+      pointContextMenuOpenRequested_ = true;
+      consumeRightMouseOrbit_ = true;
+      hoveredPointActive_ = false;
+      hoverPickCache_.valid = false;
+      drawScaleHandles();
+      return;
     }
   }
 
@@ -1647,13 +1738,15 @@ void Application::HandleCameraInput() {
     (hideBoxGizmoHovered_ && glfwGetMouseButton(window_, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS) ||
     pointScaleDrag_.active ||
     (pointScaleHandleHovered_ && glfwGetMouseButton(window_, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS);
+  const bool consumeRightMouseOrbit = consumeRightMouseOrbit_;
+  consumeRightMouseOrbit_ = false;
 
   if (!io.WantCaptureMouse && currentCloud_.bounds.IsValid()) {
     const bool middlePressed = glfwGetMouseButton(window_, GLFW_MOUSE_BUTTON_MIDDLE) == GLFW_PRESS;
     const bool rightPressed = glfwGetMouseButton(window_, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
     const bool panActive = middlePressed || (shiftPressed && rightPressed);
 
-    if (rightPressed && !shiftPressed && !gizmoCapturingLeftMouse) {
+    if (rightPressed && !shiftPressed && !gizmoCapturingLeftMouse && !consumeRightMouseOrbit) {
       camera_.Rotate(deltaX, deltaY);
       cameraTouched_ = true;
       interactionActive_ = true;
@@ -1756,6 +1849,36 @@ void Application::ClearPointSelections() {
   pointScaleHandleHovered_ = false;
   pointScaleHandleHotSelection_ = -1;
   pointScaleDrag_ = {};
+  pointContextMenuSelection_ = -1;
+  pointContextMenuOpenRequested_ = false;
+}
+
+void Application::DeletePointSelection(int selectionIndex) {
+  if (selectionIndex < 0 || selectionIndex >= static_cast<int>(pointSelections_.size())) {
+    return;
+  }
+
+  pointSelections_.erase(pointSelections_.begin() + selectionIndex);
+  if (activePointSelection_ == selectionIndex) {
+    activePointSelection_ = -1;
+  } else if (activePointSelection_ > selectionIndex) {
+    --activePointSelection_;
+  }
+
+  if (pointScaleHandleHotSelection_ == selectionIndex) {
+    pointScaleHandleHotSelection_ = -1;
+  } else if (pointScaleHandleHotSelection_ > selectionIndex) {
+    --pointScaleHandleHotSelection_;
+  }
+
+  if (pointScaleDrag_.selectionIndex == selectionIndex) {
+    pointScaleDrag_ = {};
+  } else if (pointScaleDrag_.selectionIndex > selectionIndex) {
+    --pointScaleDrag_.selectionIndex;
+  }
+
+  pointContextMenuSelection_ = -1;
+  hoverPickCache_.valid = false;
 }
 
 void Application::CommitHideBoxes() {

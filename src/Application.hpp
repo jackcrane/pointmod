@@ -82,6 +82,7 @@ class Application {
   void AddHideBox();
   void ClearHideBoxes();
   void ClearPointSelections();
+  void DeletePointSelection(int selectionIndex);
   void CommitHideBoxes();
   void ResetHideBoxGizmo();
 
@@ -140,6 +141,11 @@ class Application {
   bool pointScaleHandleHovered_ = false;
   int pointScaleHandleHotSelection_ = -1;
   PointScaleDragState pointScaleDrag_;
+  int pointContextMenuSelection_ = -1;
+  float pointContextMenuMouseX_ = 0.0f;
+  float pointContextMenuMouseY_ = 0.0f;
+  bool pointContextMenuOpenRequested_ = false;
+  bool consumeRightMouseOrbit_ = false;
   RenderDetail activeRenderDetail_ = RenderDetail::kFull;
   bool glfwInitialized_ = false;
   bool imguiInitialized_ = false;
