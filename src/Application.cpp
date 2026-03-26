@@ -1100,6 +1100,18 @@ void Application::RenderUi() {
             selectedHideBox_ = static_cast<int>(index);
             ResetHideBoxGizmo();
           }
+          if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
+            selectedHideBox_ = static_cast<int>(index);
+            ResetHideBoxGizmo();
+          }
+          const std::string popupId = "##hide-box-context-" + std::to_string(index);
+          if (ImGui::BeginPopupContextItem(popupId.c_str())) {
+            if (ImGui::MenuItem("Delete points within")) {
+              BeginHideBoxDeletionMarking(static_cast<int>(index));
+              ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+          }
           if (selected) {
             ImGui::SetItemDefaultFocus();
           }
@@ -2322,10 +2334,43 @@ void Application::BeginDeletionMarking() {
   deletionConfirmPending_ = false;
   deletionWorkflowState_ = DeletionWorkflowState::kMarking;
   deletionProcessCursor_ = 0;
+  deletionTargetHideBoxActive_ = false;
+  deletionEmptyMessage_ = "No points fell inside the selected spheres.";
   ClearPointSelections();
   hoveredPointActive_ = false;
   hoverPickCache_.valid = false;
   statusMessage_ = "Marking points for deletion...";
+}
+
+void Application::BeginHideBoxDeletionMarking(int hideBoxIndex) {
+  if (hideBoxIndex < 0 || hideBoxIndex >= static_cast<int>(hideBoxes_.size())) {
+    return;
+  }
+  if (deletionWorkflowState_ != DeletionWorkflowState::kIdle || deletionConfirmPending_) {
+    statusMessage_ = "Finish the current deletion workflow first.";
+    return;
+  }
+  if (isolatedSelectionWorkflowState_ != IsolatedSelectionWorkflowState::kDeleting) {
+    CancelIsolatedSelectionSearch();
+    ClearIsolatedSelectionPreview();
+  }
+
+  deletionSelectionSpheres_.clear();
+  deletionCandidateIndices_.clear();
+  deletionMarkedPointIndices_.clear();
+  deletionMarkedPointIndices_.reserve(currentCloud_.points.size());
+  deletionMarkedCount_ = 0;
+  deletionConfirmPending_ = false;
+  deletionWorkflowState_ = DeletionWorkflowState::kMarking;
+  deletionProcessCursor_ = 0;
+  deletionFreeformPolygon_.clear();
+  deletionFreeformHideBoxes_.clear();
+  deletionTargetHideBox_ = hideBoxes_[static_cast<std::size_t>(hideBoxIndex)];
+  deletionTargetHideBoxActive_ = true;
+  deletionEmptyMessage_ = "No points fell inside the selected hide box.";
+  hoveredPointActive_ = false;
+  hoverPickCache_.valid = false;
+  statusMessage_ = "Marking points inside hide box for deletion...";
 }
 
 void Application::BeginFreeformDeletionMarking(
@@ -2348,11 +2393,13 @@ void Application::BeginFreeformDeletionMarking(
   deletionCandidateIndices_.clear();
   if (!additive) {
     deletionMarkedPointIndices_.clear();
-    deletionMarkedCount_ = 0;
+  deletionMarkedCount_ = 0;
   }
   deletionConfirmPending_ = false;
   deletionWorkflowState_ = DeletionWorkflowState::kMarking;
   deletionProcessCursor_ = 0;
+  deletionTargetHideBoxActive_ = false;
+  deletionEmptyMessage_ = "No visible points fell inside the freeform selection.";
   deletionFreeformPolygon_ = std::move(polygon);
   deletionFreeformMinScreen_ = minScreen;
   deletionFreeformMaxScreen_ = maxScreen;
@@ -2379,6 +2426,7 @@ void Application::CancelDeletionWorkflow() {
   deletionMarkedPointIndices_.clear();
   deletionCandidateIndices_.clear();
   deletionSelectionSpheres_.clear();
+  deletionTargetHideBoxActive_ = false;
   deletionFreeformPolygon_.clear();
   deletionFreeformHideBoxes_.clear();
   deletionConfirmPending_ = false;
@@ -2407,6 +2455,7 @@ void Application::ConfirmDeletion() {
   deletionWorkingPoints_.reserve(currentCloud_.points.size() - deletionMarkedPointIndices_.size());
   deletionSelectionSpheres_.clear();
   deletionCandidateIndices_.clear();
+  deletionTargetHideBoxActive_ = false;
   deletionFreeformPolygon_.clear();
   deletionFreeformHideBoxes_.clear();
   ClearPointSelections();
@@ -3178,6 +3227,15 @@ void Application::UpdateDeletionWorkflow() {
         }
 
         const Vec3 position = PointPosition(point);
+        if (deletionTargetHideBoxActive_) {
+          if (!Contains(deletionTargetHideBox_, position)) {
+            continue;
+          }
+          point.flags |= kPointFlagMarkedForDeletion;
+          deletionMarkedPointIndices_.push_back(pointIndex);
+          continue;
+        }
+
         if (IsPointHidden(position, deletionFreeformHideBoxes_)) {
           continue;
         }
@@ -3215,11 +3273,13 @@ void Application::UpdateDeletionWorkflow() {
       visiblePointCountAccurate_ = false;
     }
     const bool usedSphereSelection = !deletionSelectionSpheres_.empty();
+    const bool usedHideBoxSelection = deletionTargetHideBoxActive_;
     deletionMarkedCount_ = deletionMarkedPointIndices_.size();
     deletionConfirmPending_ = deletionMarkedCount_ > 0;
     deletionWorkflowState_ = deletionConfirmPending_ ? DeletionWorkflowState::kConfirmPending : DeletionWorkflowState::kIdle;
     deletionCandidateIndices_.clear();
     deletionSelectionSpheres_.clear();
+    deletionTargetHideBoxActive_ = false;
     deletionFreeformPolygon_.clear();
     deletionFreeformHideBoxes_.clear();
     deletionProcessCursor_ = 0;
@@ -3227,8 +3287,10 @@ void Application::UpdateDeletionWorkflow() {
       statusMessage_ = "Marked " + std::to_string(deletionMarkedCount_) + " points for deletion. Press Backspace again to confirm.";
     } else if (usedSphereSelection) {
       statusMessage_ = "No points fell inside the selected spheres.";
+    } else if (usedHideBoxSelection) {
+      statusMessage_ = deletionEmptyMessage_;
     } else {
-      statusMessage_ = "No visible points fell inside the freeform selection.";
+      statusMessage_ = deletionEmptyMessage_;
     }
     return;
   }
@@ -3255,6 +3317,7 @@ void Application::UpdateDeletionWorkflow() {
   deletionWorkflowState_ = DeletionWorkflowState::kIdle;
   deletionSelectionSpheres_.clear();
   deletionCandidateIndices_.clear();
+  deletionTargetHideBoxActive_ = false;
   deletionFreeformPolygon_.clear();
   deletionFreeformHideBoxes_.clear();
   deletionProcessCursor_ = 0;
@@ -3316,6 +3379,7 @@ void Application::OpenPointCloud(const std::filesystem::path& path) {
   deletionMarkedPointIndices_.clear();
   deletionCandidateIndices_.clear();
   deletionSelectionSpheres_.clear();
+  deletionTargetHideBoxActive_ = false;
   deletionFreeformPolygon_.clear();
   deletionFreeformHideBoxes_.clear();
   deletionWorkingPoints_.clear();

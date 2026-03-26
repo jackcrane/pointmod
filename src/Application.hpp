@@ -161,6 +161,7 @@ class Application {
   void RebuildPointCloudRenderer();
   std::vector<SelectionSphere> BuildSelectionSpheres() const;
   void BeginDeletionMarking();
+  void BeginHideBoxDeletionMarking(int hideBoxIndex);
   void BeginFreeformDeletionMarking(
     std::vector<ImVec2>&& polygon,
     const ImVec2& minScreen,
@@ -246,6 +247,9 @@ class Application {
   std::vector<std::size_t> deletionMarkedPointIndices_;
   std::vector<std::size_t> deletionCandidateIndices_;
   std::vector<SelectionSphere> deletionSelectionSpheres_;
+  HideBox deletionTargetHideBox_{};
+  bool deletionTargetHideBoxActive_ = false;
+  std::string deletionEmptyMessage_ = "No points matched the deletion selection.";
   std::vector<ImVec2> deletionFreeformPolygon_;
   ImVec2 deletionFreeformMinScreen_ = {0.0f, 0.0f};
   ImVec2 deletionFreeformMaxScreen_ = {0.0f, 0.0f};

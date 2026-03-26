@@ -44,6 +44,7 @@ flat out int vHidden;
 const int kPointColorModeSource = 0;
 const int kPointColorModeDepth = 1;
 const int kDepthCurveSampleCount = 32;
+const int kPointFlagMarkedForDeletion = 1 << 1;
 const float kPointFlagHighlighted = 0.5;
 
 vec4 QuaternionConjugate(vec4 q) {
@@ -67,6 +68,8 @@ void main() {
   gl_Position = uViewProjection * vec4(aPosition, 1.0);
   gl_PointSize = uPointSize;
   vHidden = 0;
+  int pointFlags = int(aFlags + 0.5);
+  bool markedForDeletion = (pointFlags & kPointFlagMarkedForDeletion) != 0;
 
   if (aFlags >= kPointFlagHighlighted) {
     vColor = vec4(0.92, 0.18, 0.18, 1.0);
@@ -82,7 +85,7 @@ void main() {
     vColor = aColor;
   }
 
-  for (int hideBoxIndex = 0; hideBoxIndex < uHideBoxCount; ++hideBoxIndex) {
+  for (int hideBoxIndex = 0; !markedForDeletion && hideBoxIndex < uHideBoxCount; ++hideBoxIndex) {
     vec4 packed0 = texelFetch(uHideBoxTexture, ivec2(0, hideBoxIndex), 0);
     vec4 packed1 = texelFetch(uHideBoxTexture, ivec2(1, hideBoxIndex), 0);
     vec4 packed2 = texelFetch(uHideBoxTexture, ivec2(2, hideBoxIndex), 0);
