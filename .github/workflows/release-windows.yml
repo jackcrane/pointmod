@@ -62,7 +62,6 @@ jobs:
             --target "${{ github.sha }}" `
             --title "$env:RELEASE_NAME" `
             --notes "Automated portable Windows build for main at ${{ github.sha }}." `
-            --prerelease
 
       - name: Upload zip to release
         shell: pwsh
