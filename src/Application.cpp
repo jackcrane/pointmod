@@ -32,6 +32,7 @@ constexpr float kPointSelectionDefaultRadius = 0.1f;
 constexpr float kPointSelectionMinRadius = 0.0025f;
 constexpr std::size_t kHoverPickTargetPoints = 120'000;
 constexpr double kHoverExactSettleDelaySeconds = 0.08;
+constexpr float kHoverRequeryDistancePixels = 2.0f;
 constexpr float kPickDepthPreferenceSlack = 0.2f;
 constexpr float kRadiansToDegrees = 57.2957795131f;
 constexpr float kRotationDragPlaneEpsilon = 0.0001f;
@@ -1328,10 +1329,12 @@ void Application::UpdatePointSelectionInteraction() {
 
   const Vec3 cameraPosition = camera_.Position();
   const Vec3 cameraTarget = camera_.Target();
+  const float hoverDeltaX = mousePosition.x - hoverPickCache_.mouseX;
+  const float hoverDeltaY = mousePosition.y - hoverPickCache_.mouseY;
+  const float hoverMouseDistanceSquared = hoverDeltaX * hoverDeltaX + hoverDeltaY * hoverDeltaY;
   const bool hoverMouseChanged =
     !hoverPickCache_.valid ||
-    std::abs(hoverPickCache_.mouseX - mousePosition.x) >= 0.5f ||
-    std::abs(hoverPickCache_.mouseY - mousePosition.y) >= 0.5f;
+    hoverMouseDistanceSquared >= kHoverRequeryDistancePixels * kHoverRequeryDistancePixels;
   const bool hoverCameraChanged =
     !hoverPickCache_.valid ||
     !NearlyEqual(hoverPickCache_.cameraPosition, cameraPosition) ||

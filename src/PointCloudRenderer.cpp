@@ -568,6 +568,10 @@ void PointCloudRenderer::Render(
 
   glBindTexture(GL_TEXTURE_2D, 0);
   glBindVertexArray(0);
+  glDisable(GL_BLEND);
+  glDepthMask(GL_TRUE);
+  glDisable(GL_DEPTH_TEST);
+  glDisable(GL_PROGRAM_POINT_SIZE);
   glUseProgram(0);
 }
 
@@ -658,6 +662,8 @@ void PointCloudRenderer::RenderSelectionOverlay(
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glDepthMask(GL_FALSE);
+    glEnable(GL_CULL_FACE);
+    glCullFace(GL_BACK);
     glUniform1f(pointSizeLocation_, 1.0f);
     glBindVertexArray(overlayVao_);
     glBindBuffer(GL_ARRAY_BUFFER, overlayVbo_);
@@ -667,11 +673,13 @@ void PointCloudRenderer::RenderSelectionOverlay(
       surfaceVertices.data(),
       GL_DYNAMIC_DRAW);
     glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(surfaceVertices.size()));
+    glDisable(GL_CULL_FACE);
     glDepthMask(GL_TRUE);
     glDisable(GL_BLEND);
   }
 
   if (!lineVertices.empty()) {
+    glDisable(GL_DEPTH_TEST);
     glUniform1f(pointSizeLocation_, 1.0f);
     glBindVertexArray(overlayVao_);
     glBindBuffer(GL_ARRAY_BUFFER, overlayVbo_);
@@ -681,6 +689,7 @@ void PointCloudRenderer::RenderSelectionOverlay(
       lineVertices.data(),
       GL_DYNAMIC_DRAW);
     glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(lineVertices.size()));
+    glEnable(GL_DEPTH_TEST);
   }
 
   std::vector<PointVertex> pointVertices;
@@ -709,6 +718,7 @@ void PointCloudRenderer::RenderSelectionOverlay(
   }
 
   if (!pointVertices.empty()) {
+    glDisable(GL_DEPTH_TEST);
     glUniform1f(pointSizeLocation_, (std::max)(pointSize + 4.0f, 6.0f));
     glBindVertexArray(overlayVao_);
     glBindBuffer(GL_ARRAY_BUFFER, overlayVbo_);
@@ -718,6 +728,7 @@ void PointCloudRenderer::RenderSelectionOverlay(
       pointVertices.data(),
       GL_DYNAMIC_DRAW);
     glDrawArrays(GL_POINTS, 0, static_cast<GLsizei>(pointVertices.size()));
+    glEnable(GL_DEPTH_TEST);
   }
   glBindBuffer(GL_ARRAY_BUFFER, 0);
 }
