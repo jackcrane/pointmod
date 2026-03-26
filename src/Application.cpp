@@ -1067,9 +1067,10 @@ void Application::RenderSelectIsolatedDialog() {
         const auto cellIt = isolatedSearchGrid_.find(isolatedSearchCellKeys_[isolatedProcessCursor_]);
         if (cellIt != isolatedSearchGrid_.end() && !cellIt->second.empty()) {
           const float pointFraction = static_cast<float>(isolatedLeftCursor_) / static_cast<float>(cellIt->second.size());
+          const float phaseCount = 1.0f + static_cast<float>(isolatedNeighborOffsets_.size());
           const float phaseFraction = isolatedNeighborOffsetCursor_ < 0
-            ? pointFraction / 14.0f
-            : (1.0f + static_cast<float>(isolatedNeighborOffsetCursor_) + pointFraction) / 14.0f;
+            ? pointFraction / phaseCount
+            : (1.0f + static_cast<float>(isolatedNeighborOffsetCursor_) + pointFraction) / phaseCount;
           progressNumerator += (std::clamp)(phaseFraction, 0.0f, 0.9999f);
         }
       }
@@ -2118,12 +2119,36 @@ void Application::StartIsolatedSelectionPreview() {
 
   ClearIsolatedSelectionPreview();
   isolatedPreviewDistance_ = isolatedNeighborDistance_;
+  isolatedCellSize_ = 0.0f;
   isolatedMatchedCount_ = 0;
   isolatedMatchedPointIndices_.clear();
   isolatedSearchCellKeys_.clear();
+  isolatedNeighborOffsets_.clear();
   isolatedSearchGrid_.clear();
   isolatedExactPointCounts_.clear();
   if (isolatedPreviewDistance_ > 0.0f) {
+    constexpr float kInverseSqrt3 = 0.57735026919f;
+    isolatedCellSize_ = isolatedPreviewDistance_ * kInverseSqrt3;
+    const int maxOffset = (std::max)(1, static_cast<int>(std::ceil(isolatedPreviewDistance_ / isolatedCellSize_)) + 1);
+    const float thresholdSquared = isolatedPreviewDistance_ * isolatedPreviewDistance_;
+    for (int dx = -maxOffset; dx <= maxOffset; ++dx) {
+      for (int dy = -maxOffset; dy <= maxOffset; ++dy) {
+        for (int dz = -maxOffset; dz <= maxOffset; ++dz) {
+          if (dx < 0 || (dx == 0 && dy < 0) || (dx == 0 && dy == 0 && dz <= 0)) {
+            continue;
+          }
+
+          const float gapX = static_cast<float>((std::max)(std::abs(dx) - 1, 0)) * isolatedCellSize_;
+          const float gapY = static_cast<float>((std::max)(std::abs(dy) - 1, 0)) * isolatedCellSize_;
+          const float gapZ = static_cast<float>((std::max)(std::abs(dz) - 1, 0)) * isolatedCellSize_;
+          if (gapX * gapX + gapY * gapY + gapZ * gapZ > thresholdSquared) {
+            continue;
+          }
+
+          isolatedNeighborOffsets_.push_back(DeletionGridKey{dx, dy, dz});
+        }
+      }
+    }
     isolatedPointHasNeighbor_.assign(currentCloud_.points.size(), 0);
   } else {
     isolatedPointHasNeighbor_.clear();
@@ -2205,7 +2230,7 @@ void Application::UpdateIsolatedSelectionWorkflow() {
         continue;
       }
 
-      const float cellSize = isolatedPreviewDistance_;
+      const float cellSize = isolatedCellSize_;
       const DeletionGridKey cellKey{
         .x = static_cast<int>(std::floor(position.x / cellSize)),
         .y = static_cast<int>(std::floor(position.y / cellSize)),
@@ -2247,22 +2272,6 @@ void Application::UpdateIsolatedSelectionWorkflow() {
   }
 
   if (isolatedSelectionWorkflowState_ == IsolatedSelectionWorkflowState::kSearching) {
-    static constexpr DeletionGridKey kForwardNeighborOffsets[] = {
-      {0, 0, 1},
-      {0, 1, -1},
-      {0, 1, 0},
-      {0, 1, 1},
-      {1, -1, -1},
-      {1, -1, 0},
-      {1, -1, 1},
-      {1, 0, -1},
-      {1, 0, 0},
-      {1, 0, 1},
-      {1, 1, -1},
-      {1, 1, 0},
-      {1, 1, 1},
-    };
-
     const float thresholdSquared = isolatedPreviewDistance_ * isolatedPreviewDistance_;
     while (isolatedProcessCursor_ < isolatedSearchCellKeys_.size()) {
       const DeletionGridKey& cellKey = isolatedSearchCellKeys_[isolatedProcessCursor_];
@@ -2277,35 +2286,22 @@ void Application::UpdateIsolatedSelectionWorkflow() {
 
       const std::vector<std::uint32_t>& pointIndices = cellIt->second;
       if (isolatedNeighborOffsetCursor_ < 0) {
-        while (isolatedLeftCursor_ < pointIndices.size()) {
-          const std::uint32_t pointIndexA = pointIndices[isolatedLeftCursor_];
-          const Vec3 positionA = PointPosition(currentCloud_.points[pointIndexA]);
-          if (isolatedRightCursor_ <= isolatedLeftCursor_) {
-            isolatedRightCursor_ = isolatedLeftCursor_ + 1;
-          }
-          while (isolatedRightCursor_ < pointIndices.size()) {
-            const std::uint32_t pointIndexB = pointIndices[isolatedRightCursor_];
-            if (
-              (isolatedPointHasNeighbor_[pointIndexA] == 0 || isolatedPointHasNeighbor_[pointIndexB] == 0) &&
-              DistanceSquared(positionA, PointPosition(currentCloud_.points[pointIndexB])) <= thresholdSquared) {
-              isolatedPointHasNeighbor_[pointIndexA] = 1;
-              isolatedPointHasNeighbor_[pointIndexB] = 1;
-            }
-            ++isolatedRightCursor_;
+        if (pointIndices.size() > 1) {
+          while (isolatedLeftCursor_ < pointIndices.size()) {
+            isolatedPointHasNeighbor_[pointIndices[isolatedLeftCursor_]] = 1;
+            ++isolatedLeftCursor_;
             if (deadlineReached()) {
               return;
             }
           }
-          ++isolatedLeftCursor_;
-          isolatedRightCursor_ = isolatedLeftCursor_ + 1;
         }
         isolatedNeighborOffsetCursor_ = 0;
         isolatedLeftCursor_ = 0;
         isolatedRightCursor_ = 0;
       }
 
-      while (isolatedNeighborOffsetCursor_ < static_cast<int>(std::size(kForwardNeighborOffsets))) {
-        const DeletionGridKey& offset = kForwardNeighborOffsets[isolatedNeighborOffsetCursor_];
+      while (isolatedNeighborOffsetCursor_ < static_cast<int>(isolatedNeighborOffsets_.size())) {
+        const DeletionGridKey& offset = isolatedNeighborOffsets_[isolatedNeighborOffsetCursor_];
         const auto neighborIt = isolatedSearchGrid_.find(DeletionGridKey{
           .x = cellKey.x + offset.x,
           .y = cellKey.y + offset.y,
@@ -2506,10 +2502,12 @@ void Application::ClearIsolatedSelectionPreview() {
   const bool hadPreview = isolatedPreviewValid_ || !isolatedMatchedPointIndices_.empty();
   isolatedMatchedPointIndices_.clear();
   isolatedSearchCellKeys_.clear();
+  isolatedNeighborOffsets_.clear();
   isolatedSearchGrid_.clear();
   isolatedExactPointCounts_.clear();
   isolatedPointHasNeighbor_.clear();
   isolatedDeletionWorkingPoints_.clear();
+  isolatedCellSize_ = 0.0f;
   isolatedMatchedCount_ = 0;
   isolatedPreviewValid_ = false;
   isolatedVisiblePointCount_ = 0;
@@ -2896,10 +2894,12 @@ void Application::OpenPointCloud(const std::filesystem::path& path) {
   isolatedSelectionWorkflowState_ = IsolatedSelectionWorkflowState::kIdle;
   isolatedMatchedPointIndices_.clear();
   isolatedSearchCellKeys_.clear();
+  isolatedNeighborOffsets_.clear();
   isolatedSearchGrid_.clear();
   isolatedExactPointCounts_.clear();
   isolatedPointHasNeighbor_.clear();
   isolatedDeletionWorkingPoints_.clear();
+  isolatedCellSize_ = 0.0f;
   isolatedVisiblePointCount_ = 0;
   isolatedProcessCursor_ = 0;
   isolatedNeighborOffsetCursor_ = -1;

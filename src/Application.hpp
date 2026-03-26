@@ -220,11 +220,13 @@ class Application {
   bool selectIsolatedDialogOpen_ = false;
   float isolatedNeighborDistance_ = 0.1f;
   float isolatedPreviewDistance_ = 0.1f;
+  float isolatedCellSize_ = 0.0f;
   bool isolatedPreviewValid_ = false;
   std::size_t isolatedMatchedCount_ = 0;
   IsolatedSelectionWorkflowState isolatedSelectionWorkflowState_ = IsolatedSelectionWorkflowState::kIdle;
   std::vector<std::uint32_t> isolatedMatchedPointIndices_;
   std::vector<DeletionGridKey> isolatedSearchCellKeys_;
+  std::vector<DeletionGridKey> isolatedNeighborOffsets_;
   std::unordered_map<DeletionGridKey, std::vector<std::uint32_t>, DeletionGridKeyHash> isolatedSearchGrid_;
   std::unordered_map<ExactPointKey, std::uint32_t, ExactPointKeyHash> isolatedExactPointCounts_;
   std::vector<std::uint8_t> isolatedPointHasNeighbor_;
