@@ -29,20 +29,37 @@
 #define GL_LINES 0x0001
 #endif
 
+#ifndef GL_NEAREST
+#define GL_NEAREST 0x2600
+#endif
+
+#ifndef GL_RGBA32F
+#define GL_RGBA32F 0x8814
+#endif
+
 typedef void(APIENTRYP PFNPOINTMODGLBINDATTRIBLOCATIONPROC)(GLuint program, GLuint index, const GLchar* name);
 typedef void(APIENTRYP PFNPOINTMODGLUNIFORM1FPROC)(GLint location, GLfloat v0);
+typedef void(APIENTRYP PFNPOINTMODGLUNIFORM2FPROC)(GLint location, GLfloat v0, GLfloat v1);
+typedef void(APIENTRYP PFNPOINTMODGLUNIFORM3FPROC)(GLint location, GLfloat v0, GLfloat v1, GLfloat v2);
+typedef void(APIENTRYP PFNPOINTMODGLUNIFORM1FVPROC)(GLint location, GLsizei count, const GLfloat* value);
 typedef void(APIENTRYP PFNPOINTMODGLDRAWARRAYSPROC)(GLenum mode, GLint first, GLsizei count);
 
 namespace pointmod::gl {
 
 extern PFNPOINTMODGLBINDATTRIBLOCATIONPROC BindAttribLocation;
 extern PFNPOINTMODGLUNIFORM1FPROC Uniform1f;
+extern PFNPOINTMODGLUNIFORM2FPROC Uniform2f;
+extern PFNPOINTMODGLUNIFORM3FPROC Uniform3f;
+extern PFNPOINTMODGLUNIFORM1FVPROC Uniform1fv;
 extern PFNPOINTMODGLDRAWARRAYSPROC DrawArrays;
 
 }  // namespace pointmod::gl
 
 #define glBindAttribLocation pointmod::gl::BindAttribLocation
 #define glUniform1f pointmod::gl::Uniform1f
+#define glUniform2f pointmod::gl::Uniform2f
+#define glUniform3f pointmod::gl::Uniform3f
+#define glUniform1fv pointmod::gl::Uniform1fv
 #define glDrawArrays pointmod::gl::DrawArrays
 #endif
 
