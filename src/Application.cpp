@@ -707,6 +707,16 @@ void Application::RenderUi() {
     if (!hasLoadedCloud) {
       ImGui::BeginDisabled();
     }
+    if (ImGui::Button("Reset view")) {
+      ResetView();
+    }
+    if (!hasLoadedCloud) {
+      ImGui::EndDisabled();
+    }
+    ImGui::SameLine();
+    if (!hasLoadedCloud) {
+      ImGui::BeginDisabled();
+    }
     if (ImGui::Button("Add hide box")) {
       AddHideBox();
     }
