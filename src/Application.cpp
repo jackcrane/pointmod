@@ -2739,6 +2739,11 @@ void Application::HandleDeletionInput() {
     return;
   }
 
+  if (isolatedPreviewValid_ && !isolatedMatchedPointIndices_.empty()) {
+    StartIsolatedSelectionDeletion();
+    return;
+  }
+
   if (pointSelections_.empty()) {
     return;
   }
