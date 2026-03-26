@@ -684,7 +684,6 @@ void PointCloudRenderer::RenderHideBoxes(
     {4, 5}, {4, 6}, {5, 7}, {6, 7},
     {0, 4}, {1, 5}, {2, 6}, {3, 7},
   };
-
   for (std::size_t hideBoxIndex = 0; hideBoxIndex < hideBoxes.size(); ++hideBoxIndex) {
     const HideBox& hideBox = hideBoxes[hideBoxIndex];
     const Mat4 transform = Multiply(Translation(hideBox.center), EulerRotationXYZ(hideBox.rotationDegrees));
@@ -712,14 +711,17 @@ void PointCloudRenderer::RenderHideBoxes(
   glUniformMatrix4fv(viewProjectionLocation_, 1, GL_FALSE, viewProjection.m);
   glUniform1f(pointSizeLocation_, 1.0f);
   glUniform1i(colorModeLocation_, static_cast<int>(PointColorMode::kSource));
+  glUniform1i(hideBoxCountLocation_, 0);
   glBindVertexArray(overlayVao_);
   glBindBuffer(GL_ARRAY_BUFFER, overlayVbo_);
+  glDisable(GL_DEPTH_TEST);
   glBufferData(
     GL_ARRAY_BUFFER,
     static_cast<GLsizeiptr>(lineVertices.size() * sizeof(PointVertex)),
     lineVertices.data(),
     GL_DYNAMIC_DRAW);
   glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(lineVertices.size()));
+  glEnable(GL_DEPTH_TEST);
   glBindBuffer(GL_ARRAY_BUFFER, 0);
 }
 
