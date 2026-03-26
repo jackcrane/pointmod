@@ -2360,6 +2360,30 @@ void Application::StartIsolatedSelectionDeletion() {
     return;
   }
 
+  std::vector<std::uint32_t> visibleMatches;
+  visibleMatches.reserve(isolatedMatchedPointIndices_.size());
+  for (std::uint32_t pointIndex : isolatedMatchedPointIndices_) {
+    if (pointIndex >= currentCloud_.points.size()) {
+      continue;
+    }
+    const Vec3 position = PointPosition(currentCloud_.points[pointIndex]);
+    if (IsPointHidden(position, committedHideBoxes_)) {
+      currentCloud_.points[pointIndex].flags &= static_cast<std::uint8_t>(~kPointFlagIsolatedPreview);
+      continue;
+    }
+    visibleMatches.push_back(pointIndex);
+  }
+  if (visibleMatches.size() != isolatedMatchedPointIndices_.size()) {
+    isolatedMatchedPointIndices_ = std::move(visibleMatches);
+    isolatedMatchedCount_ = isolatedMatchedPointIndices_.size();
+    renderer_.UpdatePointCloud(currentCloud_.points, currentCloud_.bounds);
+  }
+  if (isolatedMatchedPointIndices_.empty()) {
+    isolatedPreviewValid_ = false;
+    statusMessage_ = "No isolated visible points remain outside hide boxes.";
+    return;
+  }
+
   isolatedSelectionWorkflowState_ = IsolatedSelectionWorkflowState::kDeleting;
   isolatedProcessCursor_ = 0;
   isolatedDeletionWorkingPoints_.clear();
@@ -2404,9 +2428,20 @@ void Application::UpdateIsolatedSelectionWorkflow() {
     }
 
     isolatedMatchedPointIndices_ = std::move(completedState.completedMatches);
+    std::vector<std::uint32_t> visibleMatches;
+    visibleMatches.reserve(isolatedMatchedPointIndices_.size());
     for (std::uint32_t pointIndex : isolatedMatchedPointIndices_) {
+      if (pointIndex >= currentCloud_.points.size()) {
+        continue;
+      }
+      const Vec3 position = PointPosition(currentCloud_.points[pointIndex]);
+      if (IsPointHidden(position, committedHideBoxes_)) {
+        continue;
+      }
+      visibleMatches.push_back(pointIndex);
       currentCloud_.points[pointIndex].flags |= kPointFlagIsolatedPreview;
     }
+    isolatedMatchedPointIndices_ = std::move(visibleMatches);
     renderer_.UpdatePointCloud(currentCloud_.points, currentCloud_.bounds);
     isolatedPreviewValid_ = true;
     isolatedMatchedCount_ = isolatedMatchedPointIndices_.size();
