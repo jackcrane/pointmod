@@ -530,6 +530,43 @@ void PointCloudRenderer::SetPointCloud(const std::vector<PointVertex>& points, c
   }
 }
 
+void PointCloudRenderer::UpdatePointCloud(const std::vector<PointVertex>& points, const Bounds& bounds) {
+  Initialize();
+  bounds_ = bounds;
+
+  const std::size_t expectedChunkCount = points.empty()
+    ? 0
+    : (points.size() + kUploadChunkPoints - 1) / kUploadChunkPoints;
+  if (chunks_.size() != expectedChunkCount) {
+    SetPointCloud(points, bounds);
+    return;
+  }
+
+  std::size_t totalPointCount = 0;
+  for (std::size_t chunkIndex = 0; chunkIndex < chunks_.size(); ++chunkIndex) {
+    const std::size_t start = chunkIndex * kUploadChunkPoints;
+    const std::size_t count = (std::min)(kUploadChunkPoints, points.size() - start);
+    std::vector<PointVertex> chunkPoints;
+    chunkPoints.insert(
+      chunkPoints.end(),
+      points.begin() + static_cast<std::ptrdiff_t>(start),
+      points.begin() + static_cast<std::ptrdiff_t>(start + count));
+    std::vector<PointVertex> progressivePoints = BuildProgressivePoints(chunkPoints);
+
+    GpuChunk& chunk = chunks_[chunkIndex];
+    chunk.pointCount = progressivePoints.size();
+    totalPointCount += chunk.pointCount;
+    glBindBuffer(GL_ARRAY_BUFFER, chunk.vbo);
+    glBufferData(
+      GL_ARRAY_BUFFER,
+      static_cast<GLsizeiptr>(progressivePoints.size() * sizeof(PointVertex)),
+      progressivePoints.data(),
+      GL_DYNAMIC_DRAW);
+  }
+  glBindBuffer(GL_ARRAY_BUFFER, 0);
+  pointCount_ = totalPointCount;
+}
+
 void PointCloudRenderer::Append(const PointCloudChunk& chunk) {
   Initialize();
 

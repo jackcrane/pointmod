@@ -32,6 +32,7 @@ class PointCloudRenderer {
   void Clear();
   void Append(const PointCloudChunk& chunk);
   void SetPointCloud(const std::vector<PointVertex>& points, const Bounds& bounds);
+  void UpdatePointCloud(const std::vector<PointVertex>& points, const Bounds& bounds);
   void SetHideBoxes(const std::vector<HideBox>& hideBoxes);
   void Render(
     const OrbitCamera& camera,

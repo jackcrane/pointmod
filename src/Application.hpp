@@ -16,6 +16,14 @@ class Application {
   int Run();
 
  private:
+  enum class DeletionWorkflowState {
+    kIdle,
+    kMarking,
+    kConfirmPending,
+    kClearingMarked,
+    kDeleting,
+  };
+
   enum class HideBoxGizmoMode {
     kMove,
     kScale,
@@ -77,6 +85,7 @@ class Application {
   void UpdateInteractionPointBudget();
   void HandleCameraInput();
   void HandleDeletionInput();
+  void UpdateDeletionWorkflow();
   void StartOpenDialog();
   void ResetView();
   void OpenPointCloud(const std::filesystem::path& path);
@@ -87,6 +96,7 @@ class Application {
   void RebuildPointCloudRenderer();
   std::vector<SelectionSphere> BuildSelectionSpheres() const;
   void BeginDeletionMarking();
+  void CancelDeletionWorkflow();
   void ConfirmDeletion();
   void CommitHideBoxes();
   void ResetHideBoxGizmo();
@@ -153,8 +163,12 @@ class Application {
   bool consumeRightMouseOrbit_ = false;
   bool backspaceLatched_ = false;
   bool deletionConfirmPending_ = false;
-  bool deletionDialogOpenRequested_ = false;
   std::size_t deletionMarkedCount_ = 0;
+  DeletionWorkflowState deletionWorkflowState_ = DeletionWorkflowState::kIdle;
+  std::vector<SelectionSphere> deletionSelectionSpheres_;
+  std::vector<PointVertex> deletionWorkingPoints_;
+  std::size_t deletionWorkCursor_ = 0;
+  std::size_t deletionProcessedCount_ = 0;
   RenderDetail activeRenderDetail_ = RenderDetail::kFull;
   bool glfwInitialized_ = false;
   bool imguiInitialized_ = false;

@@ -43,6 +43,7 @@ constexpr float kInteractionProbeFps = 50.0f;
 constexpr float kInteractionPointDropFactor = 0.5f;
 constexpr float kMinInteractionPointFraction = 0.001f;
 constexpr double kInteractionTuneIntervalSeconds = 0.2;
+constexpr std::size_t kDeletionWorkChunkPoints = 200'000;
 constexpr Vec3 kWorldUp = {0.0f, 0.0f, 1.0f};
 constexpr std::uint8_t kPointFlagMarkedForDeletion = 1;
 
@@ -576,6 +577,7 @@ int Application::Run() {
       UpdatePointSelectionInteraction();
       HandleCameraInput();
       HandleDeletionInput();
+      UpdateDeletionWorkflow();
       UpdateFrameStats();
       RenderScene();
       EndImGuiFrame();
@@ -880,25 +882,53 @@ void Application::RenderUi() {
     ImGui::EndPopup();
   }
 
-  if (deletionDialogOpenRequested_) {
-    ImGui::OpenPopup("DeleteMarkedPointsDialog");
-    deletionDialogOpenRequested_ = false;
+  if (deletionWorkflowState_ != DeletionWorkflowState::kIdle || deletionConfirmPending_) {
+    const ImVec2 center = viewport->GetCenter();
+    ImGui::SetNextWindowPos(center, ImGuiCond_Always, {0.5f, 0.5f});
+    ImGui::SetNextWindowBgAlpha(0.94f);
+    ImGuiWindowFlags deleteFlags =
+      ImGuiWindowFlags_AlwaysAutoResize |
+      ImGuiWindowFlags_NoCollapse;
+    if (ImGui::Begin("Delete Points", nullptr, deleteFlags)) {
+      switch (deletionWorkflowState_) {
+        case DeletionWorkflowState::kMarking:
+          ImGui::TextUnformatted("Marking points inside the selected spheres and connectors...");
+          ImGui::Text(
+            "Processed: %llu / %llu",
+            static_cast<unsigned long long>(deletionProcessedCount_),
+            static_cast<unsigned long long>(currentCloud_.points.size()));
+          if (ImGui::Button("Cancel")) {
+            CancelDeletionWorkflow();
+          }
+          break;
+        case DeletionWorkflowState::kClearingMarked:
+          ImGui::TextUnformatted("Cancelling deletion and clearing red marks...");
+          ImGui::Text(
+            "Processed: %llu / %llu",
+            static_cast<unsigned long long>(deletionProcessedCount_),
+            static_cast<unsigned long long>(currentCloud_.points.size()));
+          break;
+        case DeletionWorkflowState::kDeleting:
+          ImGui::TextUnformatted("Deleting marked points...");
+          ImGui::Text(
+            "Processed: %llu / %llu",
+            static_cast<unsigned long long>(deletionProcessedCount_),
+            static_cast<unsigned long long>(currentCloud_.points.size()));
+          break;
+        case DeletionWorkflowState::kConfirmPending:
+          ImGui::TextUnformatted("Points marked red will be deleted. Tap backspace again to confirm.");
+          ImGui::Text("Marked points: %llu", static_cast<unsigned long long>(deletionMarkedCount_));
+          if (ImGui::Button("Cancel")) {
+            CancelDeletionWorkflow();
+          }
+          break;
+        case DeletionWorkflowState::kIdle:
+          break;
+      }
+    }
+    ImGui::End();
   }
-  if (ImGui::BeginPopupModal("DeleteMarkedPointsDialog", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-    if (!deletionConfirmPending_) {
-      ImGui::CloseCurrentPopup();
-      ImGui::EndPopup();
-      return;
-    }
-    ImGui::TextUnformatted("Points marked red will be deleted. Tap backspace again to confirm.");
-    if (deletionMarkedCount_ > 0) {
-      ImGui::Text("Marked points: %llu", static_cast<unsigned long long>(deletionMarkedCount_));
-    }
-    if (ImGui::Button("Close")) {
-      ImGui::CloseCurrentPopup();
-    }
-    ImGui::EndPopup();
-  }
+
 }
 
 void Application::UpdateHideBoxGizmo() {
@@ -1362,7 +1392,7 @@ void Application::UpdatePointSelectionInteraction() {
     }
   };
 
-  if (deletionConfirmPending_) {
+  if (deletionWorkflowState_ != DeletionWorkflowState::kIdle || deletionConfirmPending_) {
     hoveredPointActive_ = false;
     hoverPickCache_.valid = false;
     drawScaleHandles();
@@ -1638,7 +1668,12 @@ std::vector<SelectionSphere> Application::BuildSelectionSpheres() const {
 
 void Application::RebuildPointCloudRenderer() {
   currentCloud_.bounds = ComputeBounds(currentCloud_.points);
-  currentCloud_.renderPointCount = static_cast<std::uint64_t>(currentCloud_.points.size());
+  currentCloud_.renderPointCount = static_cast<std::uint64_t>(std::count_if(
+    currentCloud_.points.begin(),
+    currentCloud_.points.end(),
+    [](const PointVertex& point) {
+      return (point.flags & kPointFlagMarkedForDeletion) == 0;
+    }));
   renderer_.SetPointCloud(currentCloud_.points, currentCloud_.bounds);
   if (committedHideBoxes_.empty()) {
     visiblePointCount_ = currentCloud_.renderPointCount;
@@ -1654,81 +1689,49 @@ void Application::BeginDeletionMarking() {
     return;
   }
 
+  deletionSelectionSpheres_ = selectionSpheres;
   deletionMarkedCount_ = 0;
-  for (PointVertex& point : currentCloud_.points) {
-    const Vec3 position = PointPosition(point);
-    bool marked = false;
-    for (std::size_t sphereIndex = 0; sphereIndex < selectionSpheres.size(); ++sphereIndex) {
-      if (IsInsideSphere(position, selectionSpheres[sphereIndex])) {
-        marked = true;
-        break;
-      }
-      if (sphereIndex > 0 && IsInsideConnector(position, selectionSpheres[sphereIndex - 1], selectionSpheres[sphereIndex])) {
-        marked = true;
-        break;
-      }
-    }
-
-    if (!marked) {
-      continue;
-    }
-
-    if ((point.flags & kPointFlagMarkedForDeletion) == 0) {
-      ++deletionMarkedCount_;
-    }
-    point.flags |= kPointFlagMarkedForDeletion;
-    point.r = 235;
-    point.g = 46;
-    point.b = 46;
-    point.a = 255;
-  }
-
+  deletionProcessedCount_ = 0;
+  deletionWorkCursor_ = 0;
+  deletionWorkflowState_ = DeletionWorkflowState::kMarking;
+  deletionConfirmPending_ = false;
   ClearPointSelections();
   hoveredPointActive_ = false;
   hoverPickCache_.valid = false;
-  RebuildPointCloudRenderer();
-  deletionConfirmPending_ = deletionMarkedCount_ > 0;
-  deletionDialogOpenRequested_ = deletionConfirmPending_;
-  if (deletionConfirmPending_) {
-    statusMessage_ = "Marked " + std::to_string(deletionMarkedCount_) + " points for deletion. Press Backspace again to confirm.";
-  } else {
-    statusMessage_ = "No points fell inside the selected spheres.";
-  }
+  statusMessage_ = "Marking points for deletion...";
 }
 
-void Application::ConfirmDeletion() {
-  if (!deletionConfirmPending_) {
+void Application::CancelDeletionWorkflow() {
+  if (
+    deletionWorkflowState_ != DeletionWorkflowState::kMarking &&
+    deletionWorkflowState_ != DeletionWorkflowState::kConfirmPending) {
     return;
   }
 
-  const std::size_t deletedPointCount = static_cast<std::size_t>(std::count_if(
-    currentCloud_.points.begin(),
-    currentCloud_.points.end(),
-    [](const PointVertex& point) {
-      return (point.flags & kPointFlagMarkedForDeletion) != 0;
-    }));
-  currentCloud_.points.erase(
-    std::remove_if(
-      currentCloud_.points.begin(),
-      currentCloud_.points.end(),
-      [](const PointVertex& point) {
-        return (point.flags & kPointFlagMarkedForDeletion) != 0;
-      }),
-    currentCloud_.points.end());
+  deletionWorkCursor_ = 0;
+  deletionProcessedCount_ = 0;
+  deletionWorkflowState_ = DeletionWorkflowState::kClearingMarked;
+  deletionConfirmPending_ = false;
+  statusMessage_ = "Clearing marked points...";
+}
+
+void Application::ConfirmDeletion() {
+  if (!deletionConfirmPending_ || deletionWorkflowState_ == DeletionWorkflowState::kDeleting) {
+    return;
+  }
 
   deletionConfirmPending_ = false;
-  deletionMarkedCount_ = 0;
+  deletionProcessedCount_ = 0;
+  deletionWorkCursor_ = 0;
+  deletionWorkingPoints_.clear();
+  deletionWorkingPoints_.reserve(currentCloud_.points.size() - deletionMarkedCount_);
+  deletionWorkflowState_ = DeletionWorkflowState::kDeleting;
   ClearPointSelections();
   hoveredPointActive_ = false;
   hoverPickCache_.valid = false;
   pointContextMenuSelection_ = -1;
   pointContextMenuOpenRequested_ = false;
-  RebuildPointCloudRenderer();
-  if (!cameraTouched_ && currentCloud_.bounds.IsValid()) {
-    camera_.Frame(currentCloud_.bounds);
-    cameraFramed_ = true;
-  }
-  statusMessage_ = "Deleted " + std::to_string(deletedPointCount) + " points.";
+  statusMessage_ = "Deleting marked points...";
 }
 
 void Application::UpdateCloudLoading() {
@@ -1938,6 +1941,13 @@ void Application::HandleDeletionInput() {
   }
   backspaceLatched_ = true;
 
+  if (
+    deletionWorkflowState_ == DeletionWorkflowState::kMarking ||
+    deletionWorkflowState_ == DeletionWorkflowState::kClearingMarked ||
+    deletionWorkflowState_ == DeletionWorkflowState::kDeleting) {
+    return;
+  }
+
   if (deletionConfirmPending_) {
     ConfirmDeletion();
     return;
@@ -1948,6 +1958,110 @@ void Application::HandleDeletionInput() {
   }
 
   BeginDeletionMarking();
+}
+
+void Application::UpdateDeletionWorkflow() {
+  if (
+    deletionWorkflowState_ != DeletionWorkflowState::kMarking &&
+    deletionWorkflowState_ != DeletionWorkflowState::kClearingMarked &&
+    deletionWorkflowState_ != DeletionWorkflowState::kDeleting) {
+    return;
+  }
+
+  const std::size_t end = (std::min)(currentCloud_.points.size(), deletionWorkCursor_ + kDeletionWorkChunkPoints);
+  if (deletionWorkflowState_ == DeletionWorkflowState::kMarking) {
+    for (std::size_t pointIndex = deletionWorkCursor_; pointIndex < end; ++pointIndex) {
+      PointVertex& point = currentCloud_.points[pointIndex];
+      const Vec3 position = PointPosition(point);
+      bool marked = false;
+      for (std::size_t sphereIndex = 0; sphereIndex < deletionSelectionSpheres_.size(); ++sphereIndex) {
+        if (IsInsideSphere(position, deletionSelectionSpheres_[sphereIndex])) {
+          marked = true;
+          break;
+        }
+        if (
+          sphereIndex > 0 &&
+          IsInsideConnector(position, deletionSelectionSpheres_[sphereIndex - 1], deletionSelectionSpheres_[sphereIndex])) {
+          marked = true;
+          break;
+        }
+      }
+
+      if (!marked) {
+        continue;
+      }
+
+      if ((point.flags & kPointFlagMarkedForDeletion) == 0) {
+        ++deletionMarkedCount_;
+      }
+      point.flags |= kPointFlagMarkedForDeletion;
+    }
+  } else if (deletionWorkflowState_ == DeletionWorkflowState::kClearingMarked) {
+    for (std::size_t pointIndex = deletionWorkCursor_; pointIndex < end; ++pointIndex) {
+      currentCloud_.points[pointIndex].flags &= static_cast<std::uint8_t>(~kPointFlagMarkedForDeletion);
+    }
+  } else if (deletionWorkflowState_ == DeletionWorkflowState::kDeleting) {
+    for (std::size_t pointIndex = deletionWorkCursor_; pointIndex < end; ++pointIndex) {
+      const PointVertex& point = currentCloud_.points[pointIndex];
+      if ((point.flags & kPointFlagMarkedForDeletion) != 0) {
+        continue;
+      }
+      deletionWorkingPoints_.push_back(point);
+    }
+  }
+
+  deletionWorkCursor_ = end;
+  deletionProcessedCount_ = end;
+  if (deletionWorkCursor_ < currentCloud_.points.size()) {
+    return;
+  }
+
+  if (deletionWorkflowState_ == DeletionWorkflowState::kMarking) {
+    renderer_.UpdatePointCloud(currentCloud_.points, currentCloud_.bounds);
+    if (committedHideBoxes_.empty()) {
+      visiblePointCount_ = currentCloud_.renderPointCount;
+      visiblePointCountAccurate_ = true;
+    } else {
+      visiblePointCountAccurate_ = false;
+    }
+    deletionConfirmPending_ = deletionMarkedCount_ > 0;
+    deletionWorkflowState_ = deletionConfirmPending_ ? DeletionWorkflowState::kConfirmPending : DeletionWorkflowState::kIdle;
+    if (deletionConfirmPending_) {
+      statusMessage_ = "Marked " + std::to_string(deletionMarkedCount_) + " points for deletion. Press Backspace again to confirm.";
+    } else {
+      deletionSelectionSpheres_.clear();
+      statusMessage_ = "No points fell inside the selected spheres.";
+    }
+    return;
+  }
+
+  if (deletionWorkflowState_ == DeletionWorkflowState::kClearingMarked) {
+    deletionMarkedCount_ = 0;
+    deletionSelectionSpheres_.clear();
+    renderer_.UpdatePointCloud(currentCloud_.points, currentCloud_.bounds);
+    if (committedHideBoxes_.empty()) {
+      visiblePointCount_ = currentCloud_.renderPointCount;
+      visiblePointCountAccurate_ = true;
+    } else {
+      visiblePointCountAccurate_ = false;
+    }
+    deletionWorkflowState_ = DeletionWorkflowState::kIdle;
+    statusMessage_ = "Deletion cancelled.";
+    return;
+  }
+
+  currentCloud_.points = std::move(deletionWorkingPoints_);
+  deletionWorkingPoints_.clear();
+  const std::size_t deletedPointCount = deletionMarkedCount_;
+  deletionMarkedCount_ = 0;
+  deletionSelectionSpheres_.clear();
+  deletionWorkflowState_ = DeletionWorkflowState::kIdle;
+  RebuildPointCloudRenderer();
+  if (!cameraTouched_ && currentCloud_.bounds.IsValid()) {
+    camera_.Frame(currentCloud_.bounds);
+    cameraFramed_ = true;
+  }
+  statusMessage_ = "Deleted " + std::to_string(deletedPointCount) + " points.";
 }
 
 void Application::StartOpenDialog() {
@@ -1991,8 +2105,12 @@ void Application::OpenPointCloud(const std::filesystem::path& path) {
   hoverPickCache_.valid = false;
   backspaceLatched_ = false;
   deletionConfirmPending_ = false;
-  deletionDialogOpenRequested_ = false;
   deletionMarkedCount_ = 0;
+  deletionWorkflowState_ = DeletionWorkflowState::kIdle;
+  deletionSelectionSpheres_.clear();
+  deletionWorkingPoints_.clear();
+  deletionWorkCursor_ = 0;
+  deletionProcessedCount_ = 0;
   currentCloud_.sourcePath = path;
   cameraFramed_ = false;
   cameraTouched_ = false;
