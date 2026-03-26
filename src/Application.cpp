@@ -27,6 +27,12 @@ constexpr float kGizmoRotateRadiusFactor = 0.85f;
 constexpr int kGizmoCircleSegments = 48;
 constexpr float kRadiansToDegrees = 57.2957795131f;
 constexpr float kRotationDragPlaneEpsilon = 0.0001f;
+constexpr float kInteractionTargetFpsMin = 45.0f;
+constexpr float kInteractionTargetFpsMax = 60.0f;
+constexpr float kInteractionProbeFps = 50.0f;
+constexpr float kInteractionPointDropFactor = 0.5f;
+constexpr float kMinInteractionPointFraction = 0.001f;
+constexpr double kInteractionTuneIntervalSeconds = 0.2;
 constexpr Vec3 kWorldUp = {0.0f, 0.0f, 1.0f};
 
 struct CameraRay {
@@ -249,17 +255,7 @@ const char* DetailLabel(RenderDetail detail) {
   return "Unknown";
 }
 
-RenderDetail ChooseRenderDetail(
-  RenderDetail currentDetail,
-  std::size_t residentPointCount,
-  bool loading,
-  bool interactionActive,
-  float smoothedFps) {
-  static_cast<void>(currentDetail);
-  static_cast<void>(residentPointCount);
-  static_cast<void>(loading);
-  static_cast<void>(smoothedFps);
-
+RenderDetail ChooseRenderDetail(bool interactionActive) {
   if (interactionActive) {
     return RenderDetail::kInteraction;
   }
@@ -456,7 +452,7 @@ void Application::RenderUi() {
       ImGui::Text(
         "Display detail: %s (%llu pts)",
         DetailLabel(activeRenderDetail_),
-        static_cast<unsigned long long>(renderer_.DisplayPointCount(activeRenderDetail_)));
+        static_cast<unsigned long long>(renderer_.DisplayPointCount(activeRenderDetail_, interactionPointFraction_)));
     } else {
       ImGui::TextUnformatted("No point cloud loaded");
     }
@@ -871,6 +867,7 @@ void Application::RenderScene() {
     framebufferHeight,
     pointSize_,
     activeRenderDetail_,
+    interactionPointFraction_,
     hideBoxes_,
     hideBoxesVisible_,
     selectedHideBox_);
@@ -935,13 +932,62 @@ void Application::UpdateFrameStats() {
   }
   smoothedFps_ = smoothedFrameMs_ > 0.0f ? 1000.0f / smoothedFrameMs_ : 0.0f;
 
-  const bool loading = loader_.Snapshot().loading;
-  activeRenderDetail_ = ChooseRenderDetail(
-    activeRenderDetail_,
-    renderer_.PointCount(),
-    loading,
-    interactionActive_,
-    smoothedFps_);
+  activeRenderDetail_ = ChooseRenderDetail(interactionActive_);
+  UpdateInteractionPointBudget();
+}
+
+void Application::UpdateInteractionPointBudget() {
+  const double now = glfwGetTime();
+  if (!interactionActive_ || renderer_.PointCount() == 0) {
+    interactionTuningActive_ = false;
+    interactionPointFraction_ = 1.0f;
+    interactionPointFractionMin_ = 0.0f;
+    interactionPointFractionMax_ = 1.0f;
+    lastInteractionTuneTimeSeconds_ = now;
+    return;
+  }
+
+  if (!interactionTuningActive_) {
+    interactionTuningActive_ = true;
+    interactionPointFraction_ = 1.0f;
+    interactionPointFractionMin_ = 0.0f;
+    interactionPointFractionMax_ = 1.0f;
+    lastInteractionTuneTimeSeconds_ = now;
+    return;
+  }
+
+  if (now - lastInteractionTuneTimeSeconds_ < kInteractionTuneIntervalSeconds) {
+    return;
+  }
+  lastInteractionTuneTimeSeconds_ = now;
+
+  if (smoothedFps_ < kInteractionTargetFpsMin) {
+    interactionPointFractionMax_ = (std::min)(interactionPointFractionMax_, interactionPointFraction_);
+    float nextFraction = interactionPointFraction_ * kInteractionPointDropFactor;
+    if (interactionPointFractionMin_ > 0.0f) {
+      nextFraction = (std::max)(nextFraction, (interactionPointFractionMin_ + interactionPointFraction_) * 0.5f);
+    }
+    interactionPointFraction_ = (std::max)(kMinInteractionPointFraction, nextFraction);
+    return;
+  }
+
+  interactionPointFractionMin_ = (std::max)(interactionPointFractionMin_, interactionPointFraction_);
+  if (interactionPointFraction_ >= 1.0f) {
+    return;
+  }
+
+  if (smoothedFps_ >= kInteractionTargetFpsMax) {
+    if (interactionPointFractionMax_ < 1.0f) {
+      interactionPointFraction_ = (std::min)(1.0f, (interactionPointFraction_ + interactionPointFractionMax_) * 0.5f);
+    } else {
+      interactionPointFraction_ = (std::min)(1.0f, interactionPointFraction_ * 1.5f);
+    }
+    return;
+  }
+
+  if (smoothedFps_ >= kInteractionProbeFps && interactionPointFractionMax_ > interactionPointFraction_) {
+    interactionPointFraction_ = (std::min)(1.0f, (interactionPointFraction_ + interactionPointFractionMax_) * 0.5f);
+  }
 }
 
 void Application::HandleCameraInput() {
@@ -1040,6 +1086,10 @@ void Application::OpenPointCloud(const std::filesystem::path& path) {
   cameraFramed_ = false;
   cameraTouched_ = false;
   interactionActive_ = false;
+  interactionTuningActive_ = false;
+  interactionPointFraction_ = 1.0f;
+  interactionPointFractionMin_ = 0.0f;
+  interactionPointFractionMax_ = 1.0f;
   activeRenderDetail_ = RenderDetail::kFull;
   loader_.Start(path);
   statusMessage_ = "Opening " + path.filename().string();

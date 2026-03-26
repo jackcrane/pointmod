@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <limits>
 #include <stdexcept>
 #include <vector>
 
@@ -12,8 +13,6 @@ namespace pointmod {
 namespace {
 
 constexpr std::size_t kUploadChunkPoints = 1'000'000;
-constexpr std::size_t kTargetBalancedChunkPoints = 64'000;
-constexpr std::size_t kTargetInteractionChunkPoints = 16'000;
 
 constexpr const char* kVertexShaderSource = R"(
 #version 150 core
@@ -64,18 +63,50 @@ void UploadBuffer(
   glBindVertexArray(0);
 }
 
-std::vector<PointVertex> BuildReducedPoints(const std::vector<PointVertex>& points, std::size_t targetPointCount) {
-  if (points.size() <= targetPointCount || targetPointCount == 0) {
-    return {};
+std::size_t ReverseBits(std::size_t value, unsigned int bitCount) {
+  std::size_t reversed = 0;
+  for (unsigned int bitIndex = 0; bitIndex < bitCount; ++bitIndex) {
+    reversed = (reversed << 1U) | (value & 1U);
+    value >>= 1U;
+  }
+  return reversed;
+}
+
+std::vector<PointVertex> BuildProgressivePoints(const std::vector<PointVertex>& points) {
+  if (points.size() <= 1) {
+    return points;
   }
 
-  const std::size_t stride = std::max<std::size_t>(1, (points.size() + targetPointCount - 1) / targetPointCount);
-  std::vector<PointVertex> reducedPoints;
-  reducedPoints.reserve((points.size() + stride - 1) / stride);
-  for (std::size_t pointIndex = 0; pointIndex < points.size(); pointIndex += stride) {
-    reducedPoints.push_back(points[pointIndex]);
+  std::size_t pointCapacity = 1;
+  unsigned int bitCount = 0;
+  while (pointCapacity < points.size() && bitCount < std::numeric_limits<std::size_t>::digits - 1) {
+    pointCapacity <<= 1U;
+    ++bitCount;
   }
-  return reducedPoints;
+
+  std::vector<PointVertex> progressivePoints;
+  progressivePoints.reserve(points.size());
+  for (std::size_t sampleIndex = 0; sampleIndex < pointCapacity && progressivePoints.size() < points.size(); ++sampleIndex) {
+    const std::size_t pointIndex = ReverseBits(sampleIndex, bitCount);
+    if (pointIndex < points.size()) {
+      progressivePoints.push_back(points[pointIndex]);
+    }
+  }
+  return progressivePoints;
+}
+
+std::size_t ScalePointCount(std::size_t pointCount, float fraction) {
+  if (pointCount == 0) {
+    return 0;
+  }
+
+  if (fraction >= 0.9999f) {
+    return pointCount;
+  }
+
+  const float clampedFraction = (std::clamp)(fraction, 0.0f, 1.0f);
+  const std::size_t scaledPointCount = static_cast<std::size_t>(static_cast<double>(pointCount) * static_cast<double>(clampedFraction));
+  return (std::max)(std::size_t{1}, scaledPointCount);
 }
 
 void AppendBoxEdge(std::vector<PointVertex>& vertices, const Vec3& a, const Vec3& b, std::uint8_t g, std::uint8_t bChannel) {
@@ -171,22 +202,6 @@ void PointCloudRenderer::Clear() {
       glDeleteVertexArrays(1, &chunk.vao);
       chunk.vao = 0;
     }
-    if (chunk.balancedVbo != 0) {
-      glDeleteBuffers(1, &chunk.balancedVbo);
-      chunk.balancedVbo = 0;
-    }
-    if (chunk.balancedVao != 0) {
-      glDeleteVertexArrays(1, &chunk.balancedVao);
-      chunk.balancedVao = 0;
-    }
-    if (chunk.interactionVbo != 0) {
-      glDeleteBuffers(1, &chunk.interactionVbo);
-      chunk.interactionVbo = 0;
-    }
-    if (chunk.interactionVao != 0) {
-      glDeleteVertexArrays(1, &chunk.interactionVao);
-      chunk.interactionVao = 0;
-    }
   }
 
   chunks_.clear();
@@ -222,22 +237,9 @@ void PointCloudRenderer::Append(const PointCloudChunk& chunk) {
   }
 
   GpuChunk gpuChunk;
-  gpuChunk.pointCount = chunk.points.size();
-  UploadBuffer(gpuChunk.vao, gpuChunk.vbo, chunk.points);
-
-  std::vector<PointVertex> balancedPoints = BuildReducedPoints(chunk.points, kTargetBalancedChunkPoints);
-  if (!balancedPoints.empty()) {
-    gpuChunk.balancedPointCount = balancedPoints.size();
-    UploadBuffer(gpuChunk.balancedVao, gpuChunk.balancedVbo, balancedPoints);
-  }
-
-  std::vector<PointVertex> interactionPoints = BuildReducedPoints(
-    !balancedPoints.empty() ? balancedPoints : chunk.points,
-    kTargetInteractionChunkPoints);
-  if (!interactionPoints.empty()) {
-    gpuChunk.interactionPointCount = interactionPoints.size();
-    UploadBuffer(gpuChunk.interactionVao, gpuChunk.interactionVbo, interactionPoints);
-  }
+  std::vector<PointVertex> progressivePoints = BuildProgressivePoints(chunk.points);
+  gpuChunk.pointCount = progressivePoints.size();
+  UploadBuffer(gpuChunk.vao, gpuChunk.vbo, progressivePoints);
 
   chunks_.push_back(gpuChunk);
   pointCount_ += gpuChunk.pointCount;
@@ -251,6 +253,7 @@ void PointCloudRenderer::Render(
   int viewportHeight,
   float pointSize,
   RenderDetail detail,
+  float interactionPointFraction,
   const std::vector<HideBox>& hideBoxes,
   bool drawHideBoxes,
   int selectedHideBox) const {
@@ -273,19 +276,14 @@ void PointCloudRenderer::Render(
 
   if (pointCount_ > 0) {
     for (const GpuChunk& chunk : chunks_) {
-      unsigned int vao = chunk.vao;
       std::size_t pointCount = chunk.pointCount;
-      if (detail == RenderDetail::kInteraction && chunk.interactionPointCount > 0) {
-        vao = chunk.interactionVao;
-        pointCount = chunk.interactionPointCount;
-      } else if (detail == RenderDetail::kInteraction && chunk.balancedPointCount > 0) {
-        vao = chunk.balancedVao;
-        pointCount = chunk.balancedPointCount;
-      } else if (detail == RenderDetail::kBalanced && chunk.balancedPointCount > 0) {
-        vao = chunk.balancedVao;
-        pointCount = chunk.balancedPointCount;
+      if (detail == RenderDetail::kInteraction) {
+        pointCount = ScalePointCount(chunk.pointCount, interactionPointFraction);
       }
-      glBindVertexArray(vao);
+      if (pointCount == 0) {
+        continue;
+      }
+      glBindVertexArray(chunk.vao);
       glDrawArrays(GL_POINTS, 0, static_cast<GLsizei>(pointCount));
     }
   }
@@ -366,18 +364,12 @@ std::size_t PointCloudRenderer::PointCount() const {
   return pointCount_;
 }
 
-std::size_t PointCloudRenderer::DisplayPointCount(RenderDetail detail) const {
+std::size_t PointCloudRenderer::DisplayPointCount(RenderDetail detail, float interactionPointFraction) const {
   std::size_t displayPointCount = 0;
   for (const GpuChunk& chunk : chunks_) {
-    if (detail == RenderDetail::kInteraction && chunk.interactionPointCount > 0) {
-      displayPointCount += chunk.interactionPointCount;
-    } else if (detail == RenderDetail::kInteraction && chunk.balancedPointCount > 0) {
-      displayPointCount += chunk.balancedPointCount;
-    } else if (detail == RenderDetail::kBalanced && chunk.balancedPointCount > 0) {
-      displayPointCount += chunk.balancedPointCount;
-    } else {
-      displayPointCount += chunk.pointCount;
-    }
+    displayPointCount += detail == RenderDetail::kInteraction
+      ? ScalePointCount(chunk.pointCount, interactionPointFraction)
+      : chunk.pointCount;
   }
   return displayPointCount;
 }

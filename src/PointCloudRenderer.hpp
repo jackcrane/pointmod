@@ -30,13 +30,14 @@ class PointCloudRenderer {
     int viewportHeight,
     float pointSize,
     RenderDetail detail,
+    float interactionPointFraction,
     const std::vector<HideBox>& hideBoxes,
     bool drawHideBoxes,
     int selectedHideBox) const;
 
   [[nodiscard]] bool HasCloud() const;
   [[nodiscard]] std::size_t PointCount() const;
-  [[nodiscard]] std::size_t DisplayPointCount(RenderDetail detail) const;
+  [[nodiscard]] std::size_t DisplayPointCount(RenderDetail detail, float interactionPointFraction) const;
   [[nodiscard]] const Bounds& CurrentBounds() const;
   [[nodiscard]] std::string Error() const;
 
@@ -45,12 +46,6 @@ class PointCloudRenderer {
     unsigned int vao = 0;
     unsigned int vbo = 0;
     std::size_t pointCount = 0;
-    unsigned int balancedVao = 0;
-    unsigned int balancedVbo = 0;
-    std::size_t balancedPointCount = 0;
-    unsigned int interactionVao = 0;
-    unsigned int interactionVbo = 0;
-    std::size_t interactionPointCount = 0;
   };
 
   unsigned int CompileShader(unsigned int type, const char* source);

@@ -49,6 +49,7 @@ class Application {
   void UpdateHideBoxGizmo();
   void UpdateCloudLoading();
   void UpdateFrameStats();
+  void UpdateInteractionPointBudget();
   void HandleCameraInput();
   void StartOpenDialog();
   void OpenPointCloud(const std::filesystem::path& path);
@@ -72,9 +73,14 @@ class Application {
   bool cameraFramed_ = false;
   bool cameraTouched_ = false;
   bool interactionActive_ = false;
+  bool interactionTuningActive_ = false;
   double lastFrameTimeSeconds_ = 0.0;
+  double lastInteractionTuneTimeSeconds_ = 0.0;
   float smoothedFrameMs_ = 0.0f;
   float smoothedFps_ = 0.0f;
+  float interactionPointFraction_ = 1.0f;
+  float interactionPointFractionMin_ = 0.0f;
+  float interactionPointFractionMax_ = 1.0f;
   std::uint64_t visiblePointCount_ = 0;
   std::vector<HideBox> hideBoxes_;
   bool hideBoxesVisible_ = true;
