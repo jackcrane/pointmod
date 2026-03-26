@@ -17,6 +17,8 @@ constexpr std::size_t kUploadChunkPoints = 1'000'000;
 constexpr int kHideBoxTextureWidth = 3;
 constexpr float kDepthRangeEpsilon = 0.0001f;
 constexpr int kSphereSegments = 32;
+constexpr int kSphereLatitudeSegments = 14;
+constexpr int kSphereLongitudeSegments = 24;
 constexpr std::uint8_t kSelectionRed = 235;
 constexpr std::uint8_t kHoverGreen = 165;
 constexpr std::uint8_t kHoverBlue = 32;
@@ -194,6 +196,20 @@ void AppendLine(
   vertices.push_back(PointVertex{b.x, b.y, b.z, r, g, bChannel, 255});
 }
 
+void AppendTriangle(
+  std::vector<PointVertex>& vertices,
+  const Vec3& a,
+  const Vec3& b,
+  const Vec3& c,
+  std::uint8_t r,
+  std::uint8_t g,
+  std::uint8_t bChannel,
+  std::uint8_t alpha) {
+  vertices.push_back(PointVertex{a.x, a.y, a.z, r, g, bChannel, alpha});
+  vertices.push_back(PointVertex{b.x, b.y, b.z, r, g, bChannel, alpha});
+  vertices.push_back(PointVertex{c.x, c.y, c.z, r, g, bChannel, alpha});
+}
+
 void AppendCircle(
   std::vector<PointVertex>& vertices,
   const Vec3& center,
@@ -217,6 +233,37 @@ void AppendSelectionSphere(std::vector<PointVertex>& vertices, const SelectionSp
   AppendCircle(vertices, sphere.center, radius, {1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, kSelectionRed, 70, 70);
   AppendCircle(vertices, sphere.center, radius, {1.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 1.0f}, kSelectionRed, 70, 70);
   AppendCircle(vertices, sphere.center, radius, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f, 1.0f}, kSelectionRed, 70, 70);
+}
+
+Vec3 SpherePoint(const SelectionSphere& sphere, float theta, float phi) {
+  const float sinTheta = std::sin(theta);
+  return {
+    sphere.center.x + sphere.radius * sinTheta * std::cos(phi),
+    sphere.center.y + sphere.radius * sinTheta * std::sin(phi),
+    sphere.center.z + sphere.radius * std::cos(theta),
+  };
+}
+
+void AppendSelectionSphereSurface(std::vector<PointVertex>& vertices, const SelectionSphere& sphere) {
+  const float radius = (std::max)(sphere.radius, 0.001f);
+  const SelectionSphere surfaceSphere{
+    .center = sphere.center,
+    .radius = radius,
+  };
+  for (int latitudeIndex = 0; latitudeIndex < kSphereLatitudeSegments; ++latitudeIndex) {
+    const float thetaA = static_cast<float>(latitudeIndex) / static_cast<float>(kSphereLatitudeSegments) * 3.14159265359f;
+    const float thetaB = static_cast<float>(latitudeIndex + 1) / static_cast<float>(kSphereLatitudeSegments) * 3.14159265359f;
+    for (int longitudeIndex = 0; longitudeIndex < kSphereLongitudeSegments; ++longitudeIndex) {
+      const float phiA = static_cast<float>(longitudeIndex) / static_cast<float>(kSphereLongitudeSegments) * 6.28318530718f;
+      const float phiB = static_cast<float>(longitudeIndex + 1) / static_cast<float>(kSphereLongitudeSegments) * 6.28318530718f;
+      const Vec3 a = SpherePoint(surfaceSphere, thetaA, phiA);
+      const Vec3 b = SpherePoint(surfaceSphere, thetaB, phiA);
+      const Vec3 c = SpherePoint(surfaceSphere, thetaB, phiB);
+      const Vec3 d = SpherePoint(surfaceSphere, thetaA, phiB);
+      AppendTriangle(vertices, a, b, c, kSelectionRed, 70, 70, 128);
+      AppendTriangle(vertices, a, c, d, kSelectionRed, 70, 70, 128);
+    }
+  }
 }
 
 float DistanceToBounds(const Bounds& bounds, const Vec3& point) {
@@ -591,6 +638,12 @@ void PointCloudRenderer::RenderSelectionOverlay(
   const std::vector<SelectionSphere>& selectionSpheres,
   bool drawHoveredPoint,
   const Vec3& hoveredPoint) const {
+  std::vector<PointVertex> surfaceVertices;
+  surfaceVertices.reserve(selectionSpheres.size() * static_cast<std::size_t>(kSphereLatitudeSegments * kSphereLongitudeSegments * 6));
+  for (const SelectionSphere& sphere : selectionSpheres) {
+    AppendSelectionSphereSurface(surfaceVertices, sphere);
+  }
+
   std::vector<PointVertex> lineVertices;
   lineVertices.reserve(selectionSpheres.size() * static_cast<std::size_t>(kSphereSegments * 3 * 2));
   for (const SelectionSphere& sphere : selectionSpheres) {
@@ -600,6 +653,23 @@ void PointCloudRenderer::RenderSelectionOverlay(
   glUniformMatrix4fv(viewProjectionLocation_, 1, GL_FALSE, viewProjection.m);
   glUniform1i(colorModeLocation_, static_cast<int>(PointColorMode::kSource));
   glUniform1i(hideBoxCountLocation_, 0);
+
+  if (!surfaceVertices.empty()) {
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDepthMask(GL_FALSE);
+    glUniform1f(pointSizeLocation_, 1.0f);
+    glBindVertexArray(overlayVao_);
+    glBindBuffer(GL_ARRAY_BUFFER, overlayVbo_);
+    glBufferData(
+      GL_ARRAY_BUFFER,
+      static_cast<GLsizeiptr>(surfaceVertices.size() * sizeof(PointVertex)),
+      surfaceVertices.data(),
+      GL_DYNAMIC_DRAW);
+    glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(surfaceVertices.size()));
+    glDepthMask(GL_TRUE);
+    glDisable(GL_BLEND);
+  }
 
   if (!lineVertices.empty()) {
     glUniform1f(pointSizeLocation_, 1.0f);

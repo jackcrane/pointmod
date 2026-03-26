@@ -25,11 +25,11 @@ constexpr float kGizmoHitRadiusPixels = 12.0f;
 constexpr float kGizmoArrowHeadPixels = 12.0f;
 constexpr float kGizmoRotateRadiusFactor = 0.85f;
 constexpr int kGizmoCircleSegments = 48;
-constexpr float kPointPickRadiusPixels = 10.0f;
+constexpr float kPointHoverPaddingPixels = 12.0f;
+constexpr float kPointClickPaddingPixels = 14.0f;
 constexpr float kPointScaleHandleRadiusPixels = 10.0f;
-constexpr float kPointSelectionDefaultRadius = 2.0f;
-constexpr float kPointSelectionMinRadius = 0.05f;
-constexpr std::size_t kHoverPickTargetPoints = 150'000;
+constexpr float kPointSelectionDefaultRadius = 0.1f;
+constexpr float kPointSelectionMinRadius = 0.0025f;
 constexpr float kRadiansToDegrees = 57.2957795131f;
 constexpr float kRotationDragPlaneEpsilon = 0.0001f;
 constexpr float kInteractionTargetFpsMin = 45.0f;
@@ -258,13 +258,8 @@ bool IsPointHidden(const Vec3& point, const std::vector<HideBox>& hideBoxes) {
   return false;
 }
 
-std::size_t HoverPickStep(std::size_t pointCount) {
-  if (pointCount <= kHoverPickTargetPoints) {
-    return 1;
-  }
-
-  const std::size_t step = (pointCount + kHoverPickTargetPoints - 1) / kHoverPickTargetPoints;
-  return (std::max)(std::size_t{1}, step);
+float ComputePickRadiusPixels(float pointSize, float paddingPixels) {
+  return (std::max)(pointSize * 0.75f + paddingPixels, paddingPixels);
 }
 
 Vec3 BuildScaleHandleDirection(const OrbitCamera& camera) {
@@ -1300,7 +1295,6 @@ void Application::UpdatePointSelectionInteraction() {
     return;
   }
 
-  const std::size_t hoverPointStep = HoverPickStep(currentCloud_.points.size());
   const PointPickResult hoverPick = PickPoint(
     currentCloud_.points,
     camera_,
@@ -1308,9 +1302,9 @@ void Application::UpdatePointSelectionInteraction() {
     viewportOrigin,
     viewportSize,
     mousePosition,
-    kPointPickRadiusPixels,
+    ComputePickRadiusPixels(pointSize_, kPointHoverPaddingPixels),
     committedHideBoxes_,
-    hoverPointStep);
+    1);
   if (hoverPick.hit) {
     hoveredPointActive_ = true;
     hoveredPointIndex_ = hoverPick.pointIndex;
@@ -1328,7 +1322,7 @@ void Application::UpdatePointSelectionInteraction() {
     viewportOrigin,
     viewportSize,
     mousePosition,
-    kPointPickRadiusPixels,
+    ComputePickRadiusPixels(pointSize_, kPointClickPaddingPixels),
     committedHideBoxes_,
     1);
   if (!clickPick.hit) {
