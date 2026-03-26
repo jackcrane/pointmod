@@ -6,6 +6,8 @@
 
 #include <array>
 #include <cstddef>
+#include <cstdint>
+#include <unordered_map>
 
 struct GLFWwindow;
 
@@ -16,14 +18,6 @@ class Application {
   int Run();
 
  private:
-  enum class DeletionWorkflowState {
-    kIdle,
-    kMarking,
-    kConfirmPending,
-    kClearingMarked,
-    kDeleting,
-  };
-
   enum class HideBoxGizmoMode {
     kMove,
     kScale,
@@ -71,6 +65,18 @@ class Application {
     double settleStartSeconds = 0.0;
   };
 
+  struct DeletionGridKey {
+    int x = 0;
+    int y = 0;
+    int z = 0;
+
+    bool operator==(const DeletionGridKey& other) const = default;
+  };
+
+  struct DeletionGridKeyHash {
+    std::size_t operator()(const DeletionGridKey& key) const;
+  };
+
   void InitializeWindow();
   void InitializeImGui();
   void Shutdown();
@@ -98,6 +104,9 @@ class Application {
   void BeginDeletionMarking();
   void CancelDeletionWorkflow();
   void ConfirmDeletion();
+  void InvalidateDeletionSpatialIndex();
+  void EnsureDeletionSpatialIndex();
+  std::vector<std::size_t> CollectDeletionCandidateIndices(const std::vector<SelectionSphere>& selectionSpheres);
   void CommitHideBoxes();
   void ResetHideBoxGizmo();
 
@@ -164,11 +173,12 @@ class Application {
   bool backspaceLatched_ = false;
   bool deletionConfirmPending_ = false;
   std::size_t deletionMarkedCount_ = 0;
-  DeletionWorkflowState deletionWorkflowState_ = DeletionWorkflowState::kIdle;
-  std::vector<SelectionSphere> deletionSelectionSpheres_;
-  std::vector<PointVertex> deletionWorkingPoints_;
-  std::size_t deletionWorkCursor_ = 0;
-  std::size_t deletionProcessedCount_ = 0;
+  std::vector<std::size_t> deletionMarkedPointIndices_;
+  bool deletionGridValid_ = false;
+  float deletionGridCellSize_ = 1.0f;
+  std::unordered_map<DeletionGridKey, std::vector<std::size_t>, DeletionGridKeyHash> deletionGrid_;
+  std::vector<std::uint32_t> deletionCandidateStamp_;
+  std::uint32_t deletionCandidateStampValue_ = 1;
   RenderDetail activeRenderDetail_ = RenderDetail::kFull;
   bool glfwInitialized_ = false;
   bool imguiInitialized_ = false;
