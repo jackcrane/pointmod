@@ -206,7 +206,7 @@ void PointCloudRenderer::SetPointCloud(const std::vector<PointVertex>& points, c
 
   for (std::size_t start = 0; start < points.size(); start += kUploadChunkPoints) {
     PointCloudChunk chunk;
-    const std::size_t count = std::min(kUploadChunkPoints, points.size() - start);
+    const std::size_t count = (std::min)(kUploadChunkPoints, points.size() - start);
     chunk.points.insert(chunk.points.end(), points.begin() + static_cast<std::ptrdiff_t>(start), points.begin() + static_cast<std::ptrdiff_t>(start + count));
     chunk.bounds = bounds;
     Append(chunk);
@@ -354,7 +354,6 @@ void PointCloudRenderer::RenderHideBoxes(
     static_cast<GLsizeiptr>(lineVertices.size() * sizeof(PointVertex)),
     lineVertices.data(),
     GL_DYNAMIC_DRAW);
-  glLineWidth(2.0f);
   glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(lineVertices.size()));
   glBindBuffer(GL_ARRAY_BUFFER, 0);
 }

@@ -17,8 +17,16 @@
 #define GL_STATIC_DRAW 0x88E4
 #endif
 
+#ifndef GL_DYNAMIC_DRAW
+#define GL_DYNAMIC_DRAW 0x88E8
+#endif
+
 #ifndef GL_PROGRAM_POINT_SIZE
 #define GL_PROGRAM_POINT_SIZE 0x8642
+#endif
+
+#ifndef GL_LINES
+#define GL_LINES 0x0001
 #endif
 
 typedef void(APIENTRYP PFNPOINTMODGLBINDATTRIBLOCATIONPROC)(GLuint program, GLuint index, const GLchar* name);

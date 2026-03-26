@@ -125,6 +125,11 @@ if(APPLE)
     PRIVATE
       GL_SILENCE_DEPRECATION
   )
+elseif(WIN32)
+  target_compile_definitions(pointmod
+    PRIVATE
+      NOMINMAX
+  )
 endif()
 
 target_link_libraries(pointmod

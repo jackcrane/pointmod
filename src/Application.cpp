@@ -25,22 +25,22 @@ constexpr std::size_t kBalancedDetailPointBudget = 30'000'000;
 
 Vec3 ClampHalfSize(const Vec3& halfSize) {
   return {
-    std::max(halfSize.x, 0.001f),
-    std::max(halfSize.y, 0.001f),
-    std::max(halfSize.z, 0.001f),
+    (std::max)(halfSize.x, 0.001f),
+    (std::max)(halfSize.y, 0.001f),
+    (std::max)(halfSize.z, 0.001f),
   };
 }
 
 HideBox MakeDefaultHideBox(const Bounds& bounds, const OrbitCamera& camera) {
   const Vec3 extents = bounds.Extents();
-  const float fallbackSize = std::max(bounds.Radius() * 0.2f, 0.1f);
+  const float fallbackSize = (std::max)(bounds.Radius() * 0.2f, 0.1f);
   return HideBox{
     .center = camera.Target(),
     .rotationDegrees = {0.0f, 0.0f, 0.0f},
     .halfSize = ClampHalfSize({
-      std::max(extents.x * 0.08f, fallbackSize),
-      std::max(extents.y * 0.08f, fallbackSize),
-      std::max(extents.z * 0.08f, fallbackSize),
+      (std::max)(extents.x * 0.08f, fallbackSize),
+      (std::max)(extents.y * 0.08f, fallbackSize),
+      (std::max)(extents.z * 0.08f, fallbackSize),
     }),
   };
 }
@@ -347,7 +347,7 @@ void Application::RenderUi() {
           hideBox.center.z);
 
         float moveLocal[3] = {hideBoxMoveGizmo_.x, hideBoxMoveGizmo_.y, hideBoxMoveGizmo_.z};
-        if (ImGui::DragFloat3("Move along local axes", moveLocal, std::max(currentCloud_.bounds.Radius() * 0.0025f, 0.0025f), -FLT_MAX, FLT_MAX, "%.3f")) {
+        if (ImGui::DragFloat3("Move along local axes", moveLocal, (std::max)(currentCloud_.bounds.Radius() * 0.0025f, 0.0025f), -FLT_MAX, FLT_MAX, "%.3f")) {
           const Vec3 nextMove = {moveLocal[0], moveLocal[1], moveLocal[2]};
           TranslateHideBoxLocal(hideBox, nextMove - hideBoxMoveGizmo_);
           hideBoxMoveGizmo_ = nextMove;
@@ -369,7 +369,7 @@ void Application::RenderUi() {
           hideBox.halfSize.y * 2.0f,
           hideBox.halfSize.z * 2.0f,
         };
-        if (ImGui::DragFloat3("Scale", size, std::max(currentCloud_.bounds.Radius() * 0.0025f, 0.0025f), 0.002f, FLT_MAX, "%.3f")) {
+        if (ImGui::DragFloat3("Scale", size, (std::max)(currentCloud_.bounds.Radius() * 0.0025f, 0.0025f), 0.002f, FLT_MAX, "%.3f")) {
           hideBox.halfSize = ClampHalfSize({size[0] * 0.5f, size[1] * 0.5f, size[2] * 0.5f});
           RebuildVisiblePointCloud();
         }
