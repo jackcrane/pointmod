@@ -231,6 +231,9 @@ class Application {
   std::vector<PointVertex> isolatedDeletionWorkingPoints_;
   std::size_t isolatedVisiblePointCount_ = 0;
   std::size_t isolatedProcessCursor_ = 0;
+  int isolatedNeighborOffsetCursor_ = -1;
+  std::size_t isolatedLeftCursor_ = 0;
+  std::size_t isolatedRightCursor_ = 0;
   bool useImGuiMenuBar_ = false;
   RenderDetail activeRenderDetail_ = RenderDetail::kFull;
   bool glfwInitialized_ = false;

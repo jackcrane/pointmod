@@ -46,8 +46,8 @@ constexpr float kInteractionPointDropFactor = 0.5f;
 constexpr float kMinInteractionPointFraction = 0.001f;
 constexpr double kInteractionTuneIntervalSeconds = 0.2;
 constexpr std::size_t kDeletionWorkChunkPoints = 200'000;
-constexpr std::size_t kIsolatedWorkChunkPoints = 100'000;
-constexpr std::size_t kIsolatedWorkChunkCells = 256;
+constexpr double kIsolatedWorkTimeBudgetSeconds = 0.006;
+constexpr std::size_t kIsolatedDeadlineCheckInterval = 2048;
 constexpr Vec3 kWorldUp = {0.0f, 0.0f, 1.0f};
 constexpr std::uint8_t kPointFlagIsolatedPreview = 1 << 0;
 constexpr std::uint8_t kPointFlagMarkedForDeletion = 1 << 1;
@@ -1060,27 +1060,48 @@ void Application::RenderSelectIsolatedDialog() {
         "Preparing: %llu / %llu",
         static_cast<unsigned long long>(isolatedProcessCursor_),
         static_cast<unsigned long long>(currentCloud_.points.size()));
+      ImGui::Text("Visible so far: %llu", static_cast<unsigned long long>(isolatedVisiblePointCount_));
     } else if (isolatedSelectionWorkflowState_ == IsolatedSelectionWorkflowState::kSearching) {
+      float progressNumerator = static_cast<float>(isolatedProcessCursor_);
+      if (isolatedProcessCursor_ < isolatedSearchCellKeys_.size()) {
+        const auto cellIt = isolatedSearchGrid_.find(isolatedSearchCellKeys_[isolatedProcessCursor_]);
+        if (cellIt != isolatedSearchGrid_.end() && !cellIt->second.empty()) {
+          const float pointFraction = static_cast<float>(isolatedLeftCursor_) / static_cast<float>(cellIt->second.size());
+          const float phaseFraction = isolatedNeighborOffsetCursor_ < 0
+            ? pointFraction / 14.0f
+            : (1.0f + static_cast<float>(isolatedNeighborOffsetCursor_) + pointFraction) / 14.0f;
+          progressNumerator += (std::clamp)(phaseFraction, 0.0f, 0.9999f);
+        }
+      }
       const float progress = isolatedSearchCellKeys_.empty()
         ? 1.0f
-        : static_cast<float>(isolatedProcessCursor_) / static_cast<float>(isolatedSearchCellKeys_.size());
+        : progressNumerator / static_cast<float>(isolatedSearchCellKeys_.size());
       ImGui::TextUnformatted("Searching isolated points...");
       ImGui::ProgressBar((std::clamp)(progress, 0.0f, 1.0f), ImVec2(-1.0f, 0.0f));
       ImGui::Text(
         "Cells: %llu / %llu",
         static_cast<unsigned long long>(isolatedProcessCursor_),
         static_cast<unsigned long long>(isolatedSearchCellKeys_.size()));
+      ImGui::Text("Visible points indexed: %llu", static_cast<unsigned long long>(isolatedVisiblePointCount_));
     } else if (isolatedSelectionWorkflowState_ == IsolatedSelectionWorkflowState::kFinalizing) {
       const std::size_t total = isolatedPreviewDistance_ > 0.0f ? isolatedSearchCellKeys_.size() : currentCloud_.points.size();
+      float progressNumerator = static_cast<float>(isolatedProcessCursor_);
+      if (isolatedPreviewDistance_ > 0.0f && isolatedProcessCursor_ < isolatedSearchCellKeys_.size()) {
+        const auto cellIt = isolatedSearchGrid_.find(isolatedSearchCellKeys_[isolatedProcessCursor_]);
+        if (cellIt != isolatedSearchGrid_.end() && !cellIt->second.empty()) {
+          progressNumerator += static_cast<float>(isolatedLeftCursor_) / static_cast<float>(cellIt->second.size());
+        }
+      }
       const float progress = total == 0
         ? 1.0f
-        : static_cast<float>(isolatedProcessCursor_) / static_cast<float>(total);
+        : progressNumerator / static_cast<float>(total);
       ImGui::TextUnformatted("Finalizing isolated points...");
       ImGui::ProgressBar((std::clamp)(progress, 0.0f, 1.0f), ImVec2(-1.0f, 0.0f));
       ImGui::Text(
         isolatedPreviewDistance_ > 0.0f ? "Cells: %llu / %llu" : "Points: %llu / %llu",
         static_cast<unsigned long long>(isolatedProcessCursor_),
         static_cast<unsigned long long>(total));
+      ImGui::Text("Matches so far: %llu", static_cast<unsigned long long>(isolatedMatchedPointIndices_.size()));
     } else if (isolatedSelectionWorkflowState_ == IsolatedSelectionWorkflowState::kDeleting) {
       const float progress = currentCloud_.points.empty()
         ? 1.0f
@@ -2110,6 +2131,9 @@ void Application::StartIsolatedSelectionPreview() {
   isolatedDeletionWorkingPoints_.clear();
   isolatedVisiblePointCount_ = 0;
   isolatedProcessCursor_ = 0;
+  isolatedNeighborOffsetCursor_ = -1;
+  isolatedLeftCursor_ = 0;
+  isolatedRightCursor_ = 0;
   isolatedSelectionWorkflowState_ = IsolatedSelectionWorkflowState::kCollecting;
   statusMessage_ = "Searching for isolated points...";
 }
@@ -2139,17 +2163,32 @@ void Application::UpdateIsolatedSelectionWorkflow() {
     return;
   }
 
+  const double deadlineSeconds = glfwGetTime() + kIsolatedWorkTimeBudgetSeconds;
+  std::size_t deadlineCounter = 0;
+  const auto deadlineReached = [&]() {
+    ++deadlineCounter;
+    return deadlineCounter % kIsolatedDeadlineCheckInterval == 0 && glfwGetTime() >= deadlineSeconds;
+  };
+
   if (isolatedSelectionWorkflowState_ == IsolatedSelectionWorkflowState::kCollecting) {
     const bool hasCommittedHideBoxes = !committedHideBoxes_.empty();
-    const std::size_t end = (std::min)(currentCloud_.points.size(), isolatedProcessCursor_ + kIsolatedWorkChunkPoints);
-    for (std::size_t pointIndex = isolatedProcessCursor_; pointIndex < end; ++pointIndex) {
+    while (isolatedProcessCursor_ < currentCloud_.points.size()) {
+      const std::size_t pointIndex = isolatedProcessCursor_;
       const Vec3 position = PointPosition(currentCloud_.points[pointIndex]);
       if (hasCommittedHideBoxes && IsPointHidden(position, committedHideBoxes_)) {
+        ++isolatedProcessCursor_;
+        if (deadlineReached()) {
+          return;
+        }
         continue;
       }
 
       ++isolatedVisiblePointCount_;
       if (isolatedPreviewDistance_ < 0.0f) {
+        ++isolatedProcessCursor_;
+        if (deadlineReached()) {
+          return;
+        }
         continue;
       }
       if (isolatedPreviewDistance_ == 0.0f) {
@@ -2159,6 +2198,10 @@ void Application::UpdateIsolatedSelectionWorkflow() {
           .z = std::bit_cast<std::uint32_t>(position.z),
         };
         ++isolatedExactPointCounts_[key];
+        ++isolatedProcessCursor_;
+        if (deadlineReached()) {
+          return;
+        }
         continue;
       }
 
@@ -2173,14 +2216,16 @@ void Application::UpdateIsolatedSelectionWorkflow() {
         isolatedSearchCellKeys_.push_back(cellKey);
       }
       cellIt->second.push_back(static_cast<std::uint32_t>(pointIndex));
-    }
-
-    isolatedProcessCursor_ = end;
-    if (isolatedProcessCursor_ < currentCloud_.points.size()) {
-      return;
+      ++isolatedProcessCursor_;
+      if (deadlineReached()) {
+        return;
+      }
     }
 
     isolatedProcessCursor_ = 0;
+    isolatedNeighborOffsetCursor_ = -1;
+    isolatedLeftCursor_ = 0;
+    isolatedRightCursor_ = 0;
     if (isolatedVisiblePointCount_ == 0) {
       renderer_.UpdatePointCloud(currentCloud_.points, currentCloud_.bounds);
       isolatedPreviewValid_ = true;
@@ -2218,96 +2263,147 @@ void Application::UpdateIsolatedSelectionWorkflow() {
       {1, 1, 1},
     };
 
-    const std::size_t end = (std::min)(isolatedSearchCellKeys_.size(), isolatedProcessCursor_ + kIsolatedWorkChunkCells);
     const float thresholdSquared = isolatedPreviewDistance_ * isolatedPreviewDistance_;
-    for (std::size_t cellIndex = isolatedProcessCursor_; cellIndex < end; ++cellIndex) {
-      const DeletionGridKey& cellKey = isolatedSearchCellKeys_[cellIndex];
+    while (isolatedProcessCursor_ < isolatedSearchCellKeys_.size()) {
+      const DeletionGridKey& cellKey = isolatedSearchCellKeys_[isolatedProcessCursor_];
       const auto cellIt = isolatedSearchGrid_.find(cellKey);
       if (cellIt == isolatedSearchGrid_.end()) {
+        ++isolatedProcessCursor_;
+        isolatedNeighborOffsetCursor_ = -1;
+        isolatedLeftCursor_ = 0;
+        isolatedRightCursor_ = 0;
         continue;
       }
 
       const std::vector<std::uint32_t>& pointIndices = cellIt->second;
-      for (std::size_t left = 0; left < pointIndices.size(); ++left) {
-        const std::uint32_t pointIndexA = pointIndices[left];
-        const Vec3 positionA = PointPosition(currentCloud_.points[pointIndexA]);
-        for (std::size_t right = left + 1; right < pointIndices.size(); ++right) {
-          const std::uint32_t pointIndexB = pointIndices[right];
-          if (isolatedPointHasNeighbor_[pointIndexA] != 0 && isolatedPointHasNeighbor_[pointIndexB] != 0) {
-            continue;
+      if (isolatedNeighborOffsetCursor_ < 0) {
+        while (isolatedLeftCursor_ < pointIndices.size()) {
+          const std::uint32_t pointIndexA = pointIndices[isolatedLeftCursor_];
+          const Vec3 positionA = PointPosition(currentCloud_.points[pointIndexA]);
+          if (isolatedRightCursor_ <= isolatedLeftCursor_) {
+            isolatedRightCursor_ = isolatedLeftCursor_ + 1;
           }
-          if (DistanceSquared(positionA, PointPosition(currentCloud_.points[pointIndexB])) > thresholdSquared) {
-            continue;
+          while (isolatedRightCursor_ < pointIndices.size()) {
+            const std::uint32_t pointIndexB = pointIndices[isolatedRightCursor_];
+            if (
+              (isolatedPointHasNeighbor_[pointIndexA] == 0 || isolatedPointHasNeighbor_[pointIndexB] == 0) &&
+              DistanceSquared(positionA, PointPosition(currentCloud_.points[pointIndexB])) <= thresholdSquared) {
+              isolatedPointHasNeighbor_[pointIndexA] = 1;
+              isolatedPointHasNeighbor_[pointIndexB] = 1;
+            }
+            ++isolatedRightCursor_;
+            if (deadlineReached()) {
+              return;
+            }
           }
-          isolatedPointHasNeighbor_[pointIndexA] = 1;
-          isolatedPointHasNeighbor_[pointIndexB] = 1;
+          ++isolatedLeftCursor_;
+          isolatedRightCursor_ = isolatedLeftCursor_ + 1;
         }
+        isolatedNeighborOffsetCursor_ = 0;
+        isolatedLeftCursor_ = 0;
+        isolatedRightCursor_ = 0;
       }
 
-      for (const DeletionGridKey& offset : kForwardNeighborOffsets) {
+      while (isolatedNeighborOffsetCursor_ < static_cast<int>(std::size(kForwardNeighborOffsets))) {
+        const DeletionGridKey& offset = kForwardNeighborOffsets[isolatedNeighborOffsetCursor_];
         const auto neighborIt = isolatedSearchGrid_.find(DeletionGridKey{
           .x = cellKey.x + offset.x,
           .y = cellKey.y + offset.y,
           .z = cellKey.z + offset.z,
         });
         if (neighborIt == isolatedSearchGrid_.end()) {
+          ++isolatedNeighborOffsetCursor_;
+          isolatedLeftCursor_ = 0;
+          isolatedRightCursor_ = 0;
           continue;
         }
 
         const std::vector<std::uint32_t>& neighborPointIndices = neighborIt->second;
-        for (std::uint32_t pointIndexA : pointIndices) {
+        while (isolatedLeftCursor_ < pointIndices.size()) {
+          const std::uint32_t pointIndexA = pointIndices[isolatedLeftCursor_];
           const Vec3 positionA = PointPosition(currentCloud_.points[pointIndexA]);
-          for (std::uint32_t pointIndexB : neighborPointIndices) {
-            if (isolatedPointHasNeighbor_[pointIndexA] != 0 && isolatedPointHasNeighbor_[pointIndexB] != 0) {
-              continue;
+          while (isolatedRightCursor_ < neighborPointIndices.size()) {
+            const std::uint32_t pointIndexB = neighborPointIndices[isolatedRightCursor_];
+            if (
+              (isolatedPointHasNeighbor_[pointIndexA] == 0 || isolatedPointHasNeighbor_[pointIndexB] == 0) &&
+              DistanceSquared(positionA, PointPosition(currentCloud_.points[pointIndexB])) <= thresholdSquared) {
+              isolatedPointHasNeighbor_[pointIndexA] = 1;
+              isolatedPointHasNeighbor_[pointIndexB] = 1;
             }
-            if (DistanceSquared(positionA, PointPosition(currentCloud_.points[pointIndexB])) > thresholdSquared) {
-              continue;
+            ++isolatedRightCursor_;
+            if (deadlineReached()) {
+              return;
             }
-            isolatedPointHasNeighbor_[pointIndexA] = 1;
-            isolatedPointHasNeighbor_[pointIndexB] = 1;
           }
+          ++isolatedLeftCursor_;
+          isolatedRightCursor_ = 0;
         }
+
+        ++isolatedNeighborOffsetCursor_;
+        isolatedLeftCursor_ = 0;
+        isolatedRightCursor_ = 0;
+      }
+
+      ++isolatedProcessCursor_;
+      isolatedNeighborOffsetCursor_ = -1;
+      isolatedLeftCursor_ = 0;
+      isolatedRightCursor_ = 0;
+      if (deadlineReached()) {
+        return;
       }
     }
 
-    isolatedProcessCursor_ = end;
-    if (isolatedProcessCursor_ < isolatedSearchCellKeys_.size()) {
-      return;
-    }
-
     isolatedProcessCursor_ = 0;
+    isolatedLeftCursor_ = 0;
+    isolatedRightCursor_ = 0;
+    isolatedNeighborOffsetCursor_ = -1;
     isolatedSelectionWorkflowState_ = IsolatedSelectionWorkflowState::kFinalizing;
     return;
   }
 
   if (isolatedSelectionWorkflowState_ == IsolatedSelectionWorkflowState::kFinalizing) {
     if (isolatedPreviewDistance_ > 0.0f) {
-      const std::size_t end = (std::min)(isolatedSearchCellKeys_.size(), isolatedProcessCursor_ + kIsolatedWorkChunkCells);
-      for (std::size_t cellIndex = isolatedProcessCursor_; cellIndex < end; ++cellIndex) {
-        const auto cellIt = isolatedSearchGrid_.find(isolatedSearchCellKeys_[cellIndex]);
+      while (isolatedProcessCursor_ < isolatedSearchCellKeys_.size()) {
+        const auto cellIt = isolatedSearchGrid_.find(isolatedSearchCellKeys_[isolatedProcessCursor_]);
         if (cellIt == isolatedSearchGrid_.end()) {
+          ++isolatedProcessCursor_;
+          isolatedLeftCursor_ = 0;
           continue;
         }
-        for (std::uint32_t pointIndex : cellIt->second) {
+
+        while (isolatedLeftCursor_ < cellIt->second.size()) {
+          const std::uint32_t pointIndex = cellIt->second[isolatedLeftCursor_];
           if (isolatedPointHasNeighbor_[pointIndex] != 0) {
+            ++isolatedLeftCursor_;
+            if (deadlineReached()) {
+              return;
+            }
             continue;
           }
           currentCloud_.points[pointIndex].flags |= kPointFlagIsolatedPreview;
           isolatedMatchedPointIndices_.push_back(pointIndex);
+          ++isolatedLeftCursor_;
+          if (deadlineReached()) {
+            return;
+          }
         }
-      }
 
-      isolatedProcessCursor_ = end;
-      if (isolatedProcessCursor_ < isolatedSearchCellKeys_.size()) {
-        return;
+        ++isolatedProcessCursor_;
+        isolatedLeftCursor_ = 0;
+        if (deadlineReached()) {
+          return;
+        }
       }
     } else {
       const bool hasCommittedHideBoxes = !committedHideBoxes_.empty();
-      const std::size_t end = (std::min)(currentCloud_.points.size(), isolatedProcessCursor_ + kIsolatedWorkChunkPoints);
-      for (std::size_t pointIndex = isolatedProcessCursor_; pointIndex < end; ++pointIndex) {
+      while (isolatedProcessCursor_ < currentCloud_.points.size()) {
+        const std::size_t pointIndex = isolatedProcessCursor_;
         const Vec3 position = PointPosition(currentCloud_.points[pointIndex]);
         if (hasCommittedHideBoxes && IsPointHidden(position, committedHideBoxes_)) {
+          ++isolatedProcessCursor_;
+          if (deadlineReached()) {
+            return;
+          }
           continue;
         }
 
@@ -2323,16 +2419,19 @@ void Application::UpdateIsolatedSelectionWorkflow() {
         }
 
         if (!isolated) {
+          ++isolatedProcessCursor_;
+          if (deadlineReached()) {
+            return;
+          }
           continue;
         }
 
         currentCloud_.points[pointIndex].flags |= kPointFlagIsolatedPreview;
         isolatedMatchedPointIndices_.push_back(pointIndex);
-      }
-
-      isolatedProcessCursor_ = end;
-      if (isolatedProcessCursor_ < currentCloud_.points.size()) {
-        return;
+        ++isolatedProcessCursor_;
+        if (deadlineReached()) {
+          return;
+        }
       }
     }
 
@@ -2345,6 +2444,9 @@ void Application::UpdateIsolatedSelectionWorkflow() {
     isolatedPointHasNeighbor_.clear();
     isolatedVisiblePointCount_ = 0;
     isolatedProcessCursor_ = 0;
+    isolatedNeighborOffsetCursor_ = -1;
+    isolatedLeftCursor_ = 0;
+    isolatedRightCursor_ = 0;
     isolatedSelectionWorkflowState_ = IsolatedSelectionWorkflowState::kIdle;
     if (isolatedMatchedCount_ > 0) {
       statusMessage_ = "Previewing " + std::to_string(isolatedMatchedCount_) + " isolated points.";
@@ -2381,6 +2483,9 @@ void Application::UpdateIsolatedSelectionWorkflow() {
   isolatedSelectionWorkflowState_ = IsolatedSelectionWorkflowState::kIdle;
   isolatedVisiblePointCount_ = 0;
   isolatedProcessCursor_ = 0;
+  isolatedNeighborOffsetCursor_ = -1;
+  isolatedLeftCursor_ = 0;
+  isolatedRightCursor_ = 0;
   InvalidateDeletionSpatialIndex();
   RebuildPointCloudRenderer();
   if (!cameraTouched_ && currentCloud_.bounds.IsValid()) {
@@ -2409,6 +2514,9 @@ void Application::ClearIsolatedSelectionPreview() {
   isolatedPreviewValid_ = false;
   isolatedVisiblePointCount_ = 0;
   isolatedProcessCursor_ = 0;
+  isolatedNeighborOffsetCursor_ = -1;
+  isolatedLeftCursor_ = 0;
+  isolatedRightCursor_ = 0;
   if (isolatedSelectionWorkflowState_ != IsolatedSelectionWorkflowState::kDeleting) {
     isolatedSelectionWorkflowState_ = IsolatedSelectionWorkflowState::kIdle;
   }
@@ -2794,6 +2902,9 @@ void Application::OpenPointCloud(const std::filesystem::path& path) {
   isolatedDeletionWorkingPoints_.clear();
   isolatedVisiblePointCount_ = 0;
   isolatedProcessCursor_ = 0;
+  isolatedNeighborOffsetCursor_ = -1;
+  isolatedLeftCursor_ = 0;
+  isolatedRightCursor_ = 0;
   InvalidateDeletionSpatialIndex();
   currentCloud_.sourcePath = path;
   cameraFramed_ = false;
