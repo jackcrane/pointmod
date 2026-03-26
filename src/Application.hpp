@@ -223,9 +223,9 @@ class Application {
   bool isolatedPreviewValid_ = false;
   std::size_t isolatedMatchedCount_ = 0;
   IsolatedSelectionWorkflowState isolatedSelectionWorkflowState_ = IsolatedSelectionWorkflowState::kIdle;
-  std::vector<std::size_t> isolatedMatchedPointIndices_;
+  std::vector<std::uint32_t> isolatedMatchedPointIndices_;
   std::vector<DeletionGridKey> isolatedSearchCellKeys_;
-  std::unordered_map<DeletionGridKey, std::vector<std::size_t>, DeletionGridKeyHash> isolatedSearchGrid_;
+  std::unordered_map<DeletionGridKey, std::vector<std::uint32_t>, DeletionGridKeyHash> isolatedSearchGrid_;
   std::unordered_map<ExactPointKey, std::uint32_t, ExactPointKeyHash> isolatedExactPointCounts_;
   std::vector<std::uint8_t> isolatedPointHasNeighbor_;
   std::vector<PointVertex> isolatedDeletionWorkingPoints_;

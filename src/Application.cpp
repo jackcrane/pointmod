@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <bit>
 #include <cfloat>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -2089,6 +2090,10 @@ void Application::StartIsolatedSelectionPreview() {
     statusMessage_ = "Minimum neighbor distance must be finite.";
     return;
   }
+  if (currentCloud_.points.size() > static_cast<std::size_t>((std::numeric_limits<std::uint32_t>::max)())) {
+    statusMessage_ = "Point cloud is too large for isolated selection indexing.";
+    return;
+  }
 
   ClearIsolatedSelectionPreview();
   isolatedPreviewDistance_ = isolatedNeighborDistance_;
@@ -2167,7 +2172,7 @@ void Application::UpdateIsolatedSelectionWorkflow() {
       if (inserted) {
         isolatedSearchCellKeys_.push_back(cellKey);
       }
-      cellIt->second.push_back(pointIndex);
+      cellIt->second.push_back(static_cast<std::uint32_t>(pointIndex));
     }
 
     isolatedProcessCursor_ = end;
@@ -2222,12 +2227,12 @@ void Application::UpdateIsolatedSelectionWorkflow() {
         continue;
       }
 
-      const std::vector<std::size_t>& pointIndices = cellIt->second;
+      const std::vector<std::uint32_t>& pointIndices = cellIt->second;
       for (std::size_t left = 0; left < pointIndices.size(); ++left) {
-        const std::size_t pointIndexA = pointIndices[left];
+        const std::uint32_t pointIndexA = pointIndices[left];
         const Vec3 positionA = PointPosition(currentCloud_.points[pointIndexA]);
         for (std::size_t right = left + 1; right < pointIndices.size(); ++right) {
-          const std::size_t pointIndexB = pointIndices[right];
+          const std::uint32_t pointIndexB = pointIndices[right];
           if (isolatedPointHasNeighbor_[pointIndexA] != 0 && isolatedPointHasNeighbor_[pointIndexB] != 0) {
             continue;
           }
@@ -2249,10 +2254,10 @@ void Application::UpdateIsolatedSelectionWorkflow() {
           continue;
         }
 
-        const std::vector<std::size_t>& neighborPointIndices = neighborIt->second;
-        for (std::size_t pointIndexA : pointIndices) {
+        const std::vector<std::uint32_t>& neighborPointIndices = neighborIt->second;
+        for (std::uint32_t pointIndexA : pointIndices) {
           const Vec3 positionA = PointPosition(currentCloud_.points[pointIndexA]);
-          for (std::size_t pointIndexB : neighborPointIndices) {
+          for (std::uint32_t pointIndexB : neighborPointIndices) {
             if (isolatedPointHasNeighbor_[pointIndexA] != 0 && isolatedPointHasNeighbor_[pointIndexB] != 0) {
               continue;
             }
@@ -2284,7 +2289,7 @@ void Application::UpdateIsolatedSelectionWorkflow() {
         if (cellIt == isolatedSearchGrid_.end()) {
           continue;
         }
-        for (std::size_t pointIndex : cellIt->second) {
+        for (std::uint32_t pointIndex : cellIt->second) {
           if (isolatedPointHasNeighbor_[pointIndex] != 0) {
             continue;
           }
