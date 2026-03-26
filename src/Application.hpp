@@ -18,6 +18,13 @@ class Application {
   int Run();
 
  private:
+  enum class DeletionWorkflowState {
+    kIdle,
+    kMarking,
+    kConfirmPending,
+    kDeleting,
+  };
+
   enum class HideBoxGizmoMode {
     kMove,
     kScale,
@@ -174,12 +181,17 @@ class Application {
   bool backspaceLatched_ = false;
   bool deletionConfirmPending_ = false;
   std::size_t deletionMarkedCount_ = 0;
+  DeletionWorkflowState deletionWorkflowState_ = DeletionWorkflowState::kIdle;
   std::vector<std::size_t> deletionMarkedPointIndices_;
+  std::vector<std::size_t> deletionCandidateIndices_;
+  std::vector<SelectionSphere> deletionSelectionSpheres_;
   bool deletionGridValid_ = false;
   float deletionGridCellSize_ = 1.0f;
   std::unordered_map<DeletionGridKey, std::vector<std::size_t>, DeletionGridKeyHash> deletionGrid_;
   std::vector<std::uint32_t> deletionCandidateStamp_;
   std::uint32_t deletionCandidateStampValue_ = 1;
+  std::vector<PointVertex> deletionWorkingPoints_;
+  std::size_t deletionProcessCursor_ = 0;
   bool useImGuiMenuBar_ = false;
   RenderDetail activeRenderDetail_ = RenderDetail::kFull;
   bool glfwInitialized_ = false;
