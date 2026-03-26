@@ -4,6 +4,8 @@
 #include "OrbitCamera.hpp"
 #include "PointCloudRenderer.hpp"
 
+#include <imgui.h>
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -69,6 +71,15 @@ class Application {
     bool active = false;
     int selectionIndex = -1;
     Vec3 planeNormal = {0.0f, 0.0f, 1.0f};
+  };
+
+  struct FreeformSelectionState {
+    bool pending = false;
+    bool active = false;
+    bool pendingPointHit = false;
+    std::size_t pendingPointIndex = 0;
+    ImVec2 pressPosition = {0.0f, 0.0f};
+    std::vector<ImVec2> path;
   };
 
   struct HoverPickCache {
@@ -150,6 +161,14 @@ class Application {
   void RebuildPointCloudRenderer();
   std::vector<SelectionSphere> BuildSelectionSpheres() const;
   void BeginDeletionMarking();
+  void BeginFreeformDeletionMarking(
+    std::vector<ImVec2>&& polygon,
+    const ImVec2& minScreen,
+    const ImVec2& maxScreen,
+    const Mat4& viewProjection,
+    const ImVec2& viewportOrigin,
+    const ImVec2& viewportSize,
+    bool additive);
   void CancelDeletionWorkflow();
   void ConfirmDeletion();
   void InvalidateDeletionSpatialIndex();
@@ -213,18 +232,27 @@ class Application {
   bool pointScaleHandleHovered_ = false;
   int pointScaleHandleHotSelection_ = -1;
   PointScaleDragState pointScaleDrag_;
+  FreeformSelectionState freeformSelection_;
   int pointContextMenuSelection_ = -1;
   float pointContextMenuMouseX_ = 0.0f;
   float pointContextMenuMouseY_ = 0.0f;
   bool pointContextMenuOpenRequested_ = false;
   bool consumeRightMouseOrbit_ = false;
   bool backspaceLatched_ = false;
+  bool escapeLatched_ = false;
   bool deletionConfirmPending_ = false;
   std::size_t deletionMarkedCount_ = 0;
   DeletionWorkflowState deletionWorkflowState_ = DeletionWorkflowState::kIdle;
   std::vector<std::size_t> deletionMarkedPointIndices_;
   std::vector<std::size_t> deletionCandidateIndices_;
   std::vector<SelectionSphere> deletionSelectionSpheres_;
+  std::vector<ImVec2> deletionFreeformPolygon_;
+  ImVec2 deletionFreeformMinScreen_ = {0.0f, 0.0f};
+  ImVec2 deletionFreeformMaxScreen_ = {0.0f, 0.0f};
+  Mat4 deletionFreeformViewProjection_{};
+  ImVec2 deletionFreeformViewportOrigin_ = {0.0f, 0.0f};
+  ImVec2 deletionFreeformViewportSize_ = {0.0f, 0.0f};
+  std::vector<HideBox> deletionFreeformHideBoxes_;
   bool deletionGridValid_ = false;
   float deletionGridCellSize_ = 1.0f;
   std::unordered_map<DeletionGridKey, std::vector<std::size_t>, DeletionGridKeyHash> deletionGrid_;

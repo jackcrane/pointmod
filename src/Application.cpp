@@ -30,6 +30,9 @@ constexpr int kGizmoCircleSegments = 48;
 constexpr float kPointHoverPaddingPixels = 12.0f;
 constexpr float kPointClickPaddingPixels = 14.0f;
 constexpr float kPointScaleHandleRadiusPixels = 10.0f;
+constexpr float kFreeformDragStartPixels = 6.0f;
+constexpr float kFreeformPathSamplePixels = 4.0f;
+constexpr float kFreeformStrokeThickness = 1.0f;
 constexpr float kPointSelectionDefaultRadius = 0.05f;
 constexpr float kPointSelectionMinRadius = 0.0025f;
 constexpr std::size_t kHoverPickTargetPoints = 120'000;
@@ -136,6 +139,165 @@ float DistanceSquared(const ImVec2& a, const ImVec2& b) {
 float DistanceSquared(const Vec3& a, const Vec3& b) {
   const Vec3 delta = a - b;
   return Dot(delta, delta);
+}
+
+float Cross2D(const ImVec2& a, const ImVec2& b, const ImVec2& c) {
+  return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+}
+
+bool NearlySameScreenPoint(const ImVec2& a, const ImVec2& b, float epsilon = 0.5f) {
+  return DistanceSquared(a, b) <= epsilon * epsilon;
+}
+
+float SignedPolygonArea(const std::vector<ImVec2>& polygon) {
+  if (polygon.size() < 3) {
+    return 0.0f;
+  }
+
+  float area = 0.0f;
+  for (std::size_t index = 0; index < polygon.size(); ++index) {
+    const ImVec2& a = polygon[index];
+    const ImVec2& b = polygon[(index + 1) % polygon.size()];
+    area += a.x * b.y - b.x * a.y;
+  }
+  return area * 0.5f;
+}
+
+bool PointInTriangle(const ImVec2& point, const ImVec2& a, const ImVec2& b, const ImVec2& c) {
+  const float area0 = Cross2D(point, a, b);
+  const float area1 = Cross2D(point, b, c);
+  const float area2 = Cross2D(point, c, a);
+  const bool hasNegative = area0 < 0.0f || area1 < 0.0f || area2 < 0.0f;
+  const bool hasPositive = area0 > 0.0f || area1 > 0.0f || area2 > 0.0f;
+  return !(hasNegative && hasPositive);
+}
+
+bool IsInsideScreenPolygon(const std::vector<ImVec2>& polygon, const ImVec2& point) {
+  if (polygon.size() < 3) {
+    return false;
+  }
+
+  bool inside = false;
+  for (std::size_t index = 0, previous = polygon.size() - 1; index < polygon.size(); previous = index++) {
+    const ImVec2& a = polygon[index];
+    const ImVec2& b = polygon[previous];
+    const bool intersects =
+      ((a.y > point.y) != (b.y > point.y)) &&
+      (point.x < (b.x - a.x) * (point.y - a.y) / ((b.y - a.y) != 0.0f ? (b.y - a.y) : 0.00001f) + a.x);
+    if (intersects) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
+std::vector<ImVec2> FinalizeFreeformPolygon(const std::vector<ImVec2>& path) {
+  std::vector<ImVec2> polygon;
+  polygon.reserve(path.size());
+  for (const ImVec2& point : path) {
+    if (!polygon.empty() && NearlySameScreenPoint(polygon.back(), point)) {
+      continue;
+    }
+    polygon.push_back(point);
+  }
+
+  if (polygon.size() >= 2 && NearlySameScreenPoint(polygon.front(), polygon.back())) {
+    polygon.pop_back();
+  }
+
+  if (polygon.size() < 3) {
+    polygon.clear();
+    return polygon;
+  }
+
+  std::vector<ImVec2> simplified;
+  simplified.reserve(polygon.size());
+  for (std::size_t index = 0; index < polygon.size(); ++index) {
+    const ImVec2& previous = polygon[(index + polygon.size() - 1) % polygon.size()];
+    const ImVec2& current = polygon[index];
+    const ImVec2& next = polygon[(index + 1) % polygon.size()];
+    if (std::abs(Cross2D(previous, current, next)) <= 0.5f) {
+      continue;
+    }
+    simplified.push_back(current);
+  }
+
+  if (simplified.size() < 3) {
+    simplified = polygon;
+  }
+  return simplified;
+}
+
+bool TriangulateScreenPolygon(const std::vector<ImVec2>& polygon, std::vector<int>& triangleIndices) {
+  triangleIndices.clear();
+  if (polygon.size() < 3) {
+    return false;
+  }
+
+  std::vector<int> indices;
+  indices.reserve(polygon.size());
+  const bool isCounterClockwise = SignedPolygonArea(polygon) >= 0.0f;
+  if (isCounterClockwise) {
+    for (std::size_t index = 0; index < polygon.size(); ++index) {
+      indices.push_back(static_cast<int>(index));
+    }
+  } else {
+    for (std::size_t index = polygon.size(); index-- > 0;) {
+      indices.push_back(static_cast<int>(index));
+    }
+  }
+
+  int guard = 0;
+  while (indices.size() > 3 && guard < static_cast<int>(polygon.size() * polygon.size())) {
+    bool clippedEar = false;
+    for (std::size_t vertexIndex = 0; vertexIndex < indices.size(); ++vertexIndex) {
+      const int previousIndex = indices[(vertexIndex + indices.size() - 1) % indices.size()];
+      const int currentIndex = indices[vertexIndex];
+      const int nextIndex = indices[(vertexIndex + 1) % indices.size()];
+      const ImVec2& previous = polygon[static_cast<std::size_t>(previousIndex)];
+      const ImVec2& current = polygon[static_cast<std::size_t>(currentIndex)];
+      const ImVec2& next = polygon[static_cast<std::size_t>(nextIndex)];
+
+      if (Cross2D(previous, current, next) <= 0.0f) {
+        continue;
+      }
+
+      bool containsOtherVertex = false;
+      for (int otherIndex : indices) {
+        if (otherIndex == previousIndex || otherIndex == currentIndex || otherIndex == nextIndex) {
+          continue;
+        }
+        if (PointInTriangle(polygon[static_cast<std::size_t>(otherIndex)], previous, current, next)) {
+          containsOtherVertex = true;
+          break;
+        }
+      }
+      if (containsOtherVertex) {
+        continue;
+      }
+
+      triangleIndices.push_back(previousIndex);
+      triangleIndices.push_back(currentIndex);
+      triangleIndices.push_back(nextIndex);
+      indices.erase(indices.begin() + static_cast<std::ptrdiff_t>(vertexIndex));
+      clippedEar = true;
+      break;
+    }
+
+    if (!clippedEar) {
+      triangleIndices.clear();
+      return false;
+    }
+    ++guard;
+  }
+
+  if (indices.size() == 3) {
+    triangleIndices.insert(triangleIndices.end(), indices.begin(), indices.end());
+    return true;
+  }
+
+  triangleIndices.clear();
+  return false;
 }
 
 float Clamp01(float value) {
@@ -913,7 +1075,7 @@ void Application::RenderUi() {
         depthCurveDragValue_);
       ImGui::TextWrapped("Drag across the graph to remap brightness from near to far camera distance.");
     }
-    ImGui::TextWrapped("Controls: left click a point to add a red sphere, drag its red square grip to resize, right click a sphere to delete it, backspace marks and confirms deletion, right drag orbit, middle drag or Shift+right drag pan, wheel zoom.");
+    ImGui::TextWrapped("Controls: left click a point to add a red sphere, left click and drag for a freeform red selection, drag a sphere's red square grip to resize, right click a sphere to delete it, backspace deletes marked red points or confirms sphere deletion, right drag orbit, middle drag or Shift+right drag pan, wheel zoom.");
 
     if (hasHideBoxes) {
       ImGui::Separator();
@@ -996,10 +1158,17 @@ void Application::RenderUi() {
     if (ImGui::Begin("Delete Points", nullptr, deleteFlags)) {
       if (deletionWorkflowState_ == DeletionWorkflowState::kMarking) {
         ImGui::TextUnformatted("Marking points for deletion...");
-        ImGui::Text(
-          "Candidates: %llu / %llu",
-          static_cast<unsigned long long>(deletionProcessCursor_),
-          static_cast<unsigned long long>(deletionCandidateIndices_.size()));
+        if (!deletionSelectionSpheres_.empty()) {
+          ImGui::Text(
+            "Candidates: %llu / %llu",
+            static_cast<unsigned long long>(deletionProcessCursor_),
+            static_cast<unsigned long long>(deletionCandidateIndices_.size()));
+        } else {
+          ImGui::Text(
+            "Points: %llu / %llu",
+            static_cast<unsigned long long>(deletionProcessCursor_),
+            static_cast<unsigned long long>(currentCloud_.points.size()));
+        }
       } else if (deletionWorkflowState_ == DeletionWorkflowState::kDeleting) {
         ImGui::TextUnformatted("Deleting marked points...");
         ImGui::Text(
@@ -1468,6 +1637,7 @@ void Application::UpdatePointSelectionInteraction() {
     hoveredPointActive_ = false;
     hoverPickCache_.valid = false;
     pointScaleDrag_ = {};
+    freeformSelection_ = {};
     return;
   }
 
@@ -1487,6 +1657,7 @@ void Application::UpdatePointSelectionInteraction() {
     hoveredPointActive_ = false;
     hoverPickCache_.valid = false;
     pointScaleDrag_ = {};
+    freeformSelection_ = {};
     return;
   }
 
@@ -1586,10 +1757,51 @@ void Application::UpdatePointSelectionInteraction() {
     }
   };
 
-  if (deletionConfirmPending_) {
+  auto drawFreeformSelection = [&]() {
+    if (!freeformSelection_.active || freeformSelection_.path.size() < 2) {
+      return;
+    }
+
+    const std::vector<ImVec2> polygon = FinalizeFreeformPolygon(freeformSelection_.path);
+    ImDrawList* drawList = ImGui::GetBackgroundDrawList();
+    if (polygon.size() >= 3) {
+      std::vector<int> triangleIndices;
+      if (TriangulateScreenPolygon(polygon, triangleIndices)) {
+        for (std::size_t triangleIndex = 0; triangleIndex + 2 < triangleIndices.size(); triangleIndex += 3) {
+          drawList->AddTriangleFilled(
+            polygon[static_cast<std::size_t>(triangleIndices[triangleIndex])],
+            polygon[static_cast<std::size_t>(triangleIndices[triangleIndex + 1])],
+            polygon[static_cast<std::size_t>(triangleIndices[triangleIndex + 2])],
+            IM_COL32(110, 225, 255, 52));
+        }
+      }
+      drawList->AddPolyline(
+        polygon.data(),
+        static_cast<int>(polygon.size()),
+        IM_COL32(150, 235, 255, 220),
+        ImDrawFlags_Closed,
+        kFreeformStrokeThickness);
+    } else {
+      drawList->AddPolyline(
+        freeformSelection_.path.data(),
+        static_cast<int>(freeformSelection_.path.size()),
+        IM_COL32(150, 235, 255, 220),
+        0,
+        kFreeformStrokeThickness);
+    }
+  };
+
+  const bool deletionWorkflowBusy =
+    deletionWorkflowState_ != DeletionWorkflowState::kIdle &&
+    deletionWorkflowState_ != DeletionWorkflowState::kConfirmPending;
+  if (deletionWorkflowBusy) {
     hoveredPointActive_ = false;
     hoverPickCache_.valid = false;
+    if (!ImGui::IsMouseDown(0)) {
+      freeformSelection_ = {};
+    }
     drawScaleHandles();
+    drawFreeformSelection();
     return;
   }
 
@@ -1598,6 +1810,7 @@ void Application::UpdatePointSelectionInteraction() {
       pointScaleDrag_.selectionIndex < 0 ||
       pointScaleDrag_.selectionIndex >= static_cast<int>(pointSelections_.size())) {
       pointScaleDrag_ = {};
+      freeformSelection_ = {};
       return;
     }
 
@@ -1623,24 +1836,34 @@ void Application::UpdatePointSelectionInteraction() {
       selection.radius = (std::max)(kPointSelectionMinRadius, Length(hitPoint - center));
     }
     drawScaleHandles();
+    drawFreeformSelection();
     return;
   }
+
+  const Mat4 viewProjection = camera_.ViewProjection(viewportSize.x / viewportSize.y);
 
   if (!mouseInViewport || io.WantCaptureMouse || hideBoxGizmoDrag_.active || hideBoxGizmoHovered_) {
     hoveredPointActive_ = false;
     hoverPickCache_.valid = false;
+    if (!ImGui::IsMouseDown(0)) {
+      freeformSelection_ = {};
+    }
     drawScaleHandles();
+    drawFreeformSelection();
     return;
   }
 
   if (ImGui::IsMouseDown(1) || ImGui::IsMouseDown(2)) {
     hoveredPointActive_ = false;
     hoverPickCache_.valid = false;
+    if (!ImGui::IsMouseDown(0)) {
+      freeformSelection_ = {};
+    }
     drawScaleHandles();
+    drawFreeformSelection();
     return;
   }
 
-  const Mat4 viewProjection = camera_.ViewProjection(viewportSize.x / viewportSize.y);
   const Vec3 handleDirection = BuildScaleHandleDirection(camera_);
   float bestHandleDistanceSquared = kPointScaleHandleRadiusPixels * kPointScaleHandleRadiusPixels;
 
@@ -1668,6 +1891,101 @@ void Application::UpdatePointSelectionInteraction() {
     }
   }
 
+  if (freeformSelection_.pending || freeformSelection_.active) {
+    hoveredPointActive_ = false;
+    hoverPickCache_.valid = false;
+
+    if (!ImGui::IsMouseDown(0)) {
+      if (freeformSelection_.active) {
+        std::vector<ImVec2> polygon = FinalizeFreeformPolygon(freeformSelection_.path);
+        if (polygon.size() >= 3) {
+          ImVec2 minScreen = polygon.front();
+          ImVec2 maxScreen = polygon.front();
+          for (const ImVec2& point : polygon) {
+            minScreen.x = (std::min)(minScreen.x, point.x);
+            minScreen.y = (std::min)(minScreen.y, point.y);
+            maxScreen.x = (std::max)(maxScreen.x, point.x);
+            maxScreen.y = (std::max)(maxScreen.y, point.y);
+          }
+          BeginFreeformDeletionMarking(
+            std::move(polygon),
+            minScreen,
+            maxScreen,
+            viewProjection,
+            viewportOrigin,
+            viewportSize,
+            deletionConfirmPending_);
+        }
+      } else if (
+        !deletionConfirmPending_ &&
+        freeformSelection_.pendingPointHit &&
+        freeformSelection_.pendingPointIndex < currentCloud_.points.size()) {
+        hoveredPointActive_ = true;
+        hoveredPointIndex_ = freeformSelection_.pendingPointIndex;
+        hoverPickCache_.valid = false;
+
+        bool matchedExistingSelection = false;
+        for (std::size_t selectionIndex = 0; selectionIndex < pointSelections_.size(); ++selectionIndex) {
+          if (pointSelections_[selectionIndex].pointIndex == freeformSelection_.pendingPointIndex) {
+            activePointSelection_ = static_cast<int>(selectionIndex);
+            matchedExistingSelection = true;
+            break;
+          }
+        }
+
+        if (!matchedExistingSelection) {
+          pointSelections_.push_back(PointSelection{
+            .pointIndex = freeformSelection_.pendingPointIndex,
+            .radius = pointSelections_.empty() ? kPointSelectionDefaultRadius : pointSelections_.back().radius,
+          });
+          activePointSelection_ = static_cast<int>(pointSelections_.size()) - 1;
+        }
+      }
+
+      freeformSelection_ = {};
+      drawScaleHandles();
+      return;
+    }
+
+    const float dragDistanceSquared = DistanceSquared(mousePosition, freeformSelection_.pressPosition);
+    if (
+      !freeformSelection_.active &&
+      dragDistanceSquared >= kFreeformDragStartPixels * kFreeformDragStartPixels) {
+      freeformSelection_.active = true;
+      freeformSelection_.path.clear();
+      freeformSelection_.path.push_back(freeformSelection_.pressPosition);
+      freeformSelection_.path.push_back(mousePosition);
+    } else if (freeformSelection_.active) {
+      if (
+        freeformSelection_.path.empty() ||
+        DistanceSquared(freeformSelection_.path.back(), mousePosition) >= kFreeformPathSamplePixels * kFreeformPathSamplePixels) {
+        freeformSelection_.path.push_back(mousePosition);
+      } else {
+        freeformSelection_.path.back() = mousePosition;
+      }
+    }
+
+    drawScaleHandles();
+    drawFreeformSelection();
+    return;
+  }
+
+  if (deletionConfirmPending_) {
+    hoveredPointActive_ = false;
+    hoverPickCache_.valid = false;
+    if (ImGui::IsMouseClicked(0)) {
+      freeformSelection_.pending = true;
+      freeformSelection_.active = false;
+      freeformSelection_.pendingPointHit = false;
+      freeformSelection_.pendingPointIndex = 0;
+      freeformSelection_.pressPosition = mousePosition;
+      freeformSelection_.path.clear();
+    }
+    drawScaleHandles();
+    drawFreeformSelection();
+    return;
+  }
+
   if (ImGui::IsMouseClicked(1)) {
     int contextSelectionIndex = -1;
     if (hitTestPointSphere(viewProjection, contextSelectionIndex)) {
@@ -1680,6 +1998,7 @@ void Application::UpdatePointSelectionInteraction() {
       hoveredPointActive_ = false;
       hoverPickCache_.valid = false;
       drawScaleHandles();
+      drawFreeformSelection();
       return;
     }
   }
@@ -1699,6 +2018,30 @@ void Application::UpdatePointSelectionInteraction() {
       planeNormal = {0.0f, 0.0f, 1.0f};
     }
     pointScaleDrag_.planeNormal = planeNormal;
+    drawScaleHandles();
+    drawFreeformSelection();
+    return;
+  }
+
+  if (ImGui::IsMouseClicked(0)) {
+    const PointPickResult clickPick = PickPoint(
+      currentCloud_.points,
+      camera_,
+      viewProjection,
+      viewportOrigin,
+      viewportSize,
+      mousePosition,
+      ComputePickRadiusPixels(pointSize_, kPointClickPaddingPixels),
+      committedHideBoxes_,
+      1);
+    freeformSelection_.pending = true;
+    freeformSelection_.active = false;
+    freeformSelection_.pendingPointHit = clickPick.hit;
+    freeformSelection_.pendingPointIndex = clickPick.pointIndex;
+    freeformSelection_.pressPosition = mousePosition;
+    freeformSelection_.path.clear();
+    hoveredPointActive_ = false;
+    hoverPickCache_.valid = false;
     drawScaleHandles();
     return;
   }
@@ -1755,44 +2098,8 @@ void Application::UpdatePointSelectionInteraction() {
     hoverPickCache_.exactResolved = true;
   }
 
-  if (!ImGui::IsMouseClicked(0)) {
-    drawScaleHandles();
-    return;
-  }
-
-  const PointPickResult clickPick = PickPoint(
-    currentCloud_.points,
-    camera_,
-    viewProjection,
-    viewportOrigin,
-    viewportSize,
-    mousePosition,
-    ComputePickRadiusPixels(pointSize_, kPointClickPaddingPixels),
-    committedHideBoxes_,
-    1);
-  if (!clickPick.hit) {
-    drawScaleHandles();
-    return;
-  }
-
-  hoveredPointActive_ = true;
-  hoveredPointIndex_ = clickPick.pointIndex;
-  hoverPickCache_.valid = false;
-
-  for (std::size_t selectionIndex = 0; selectionIndex < pointSelections_.size(); ++selectionIndex) {
-    if (pointSelections_[selectionIndex].pointIndex == clickPick.pointIndex) {
-      activePointSelection_ = static_cast<int>(selectionIndex);
-      drawScaleHandles();
-      return;
-    }
-  }
-
-  pointSelections_.push_back(PointSelection{
-    .pointIndex = clickPick.pointIndex,
-    .radius = pointSelections_.empty() ? kPointSelectionDefaultRadius : pointSelections_.back().radius,
-  });
-  activePointSelection_ = static_cast<int>(pointSelections_.size()) - 1;
   drawScaleHandles();
+  drawFreeformSelection();
 }
 
 void Application::RenderScene() {
@@ -2015,6 +2322,43 @@ void Application::BeginDeletionMarking() {
   statusMessage_ = "Marking points for deletion...";
 }
 
+void Application::BeginFreeformDeletionMarking(
+  std::vector<ImVec2>&& polygon,
+  const ImVec2& minScreen,
+  const ImVec2& maxScreen,
+  const Mat4& viewProjection,
+  const ImVec2& viewportOrigin,
+  const ImVec2& viewportSize,
+  bool additive) {
+  if (polygon.size() < 3) {
+    return;
+  }
+  if (isolatedSelectionWorkflowState_ != IsolatedSelectionWorkflowState::kDeleting) {
+    CancelIsolatedSelectionSearch();
+    ClearIsolatedSelectionPreview();
+  }
+
+  deletionSelectionSpheres_.clear();
+  deletionCandidateIndices_.clear();
+  if (!additive) {
+    deletionMarkedPointIndices_.clear();
+    deletionMarkedCount_ = 0;
+  }
+  deletionConfirmPending_ = false;
+  deletionWorkflowState_ = DeletionWorkflowState::kMarking;
+  deletionProcessCursor_ = 0;
+  deletionFreeformPolygon_ = std::move(polygon);
+  deletionFreeformMinScreen_ = minScreen;
+  deletionFreeformMaxScreen_ = maxScreen;
+  deletionFreeformViewProjection_ = viewProjection;
+  deletionFreeformViewportOrigin_ = viewportOrigin;
+  deletionFreeformViewportSize_ = viewportSize;
+  deletionFreeformHideBoxes_ = committedHideBoxes_;
+  hoveredPointActive_ = false;
+  hoverPickCache_.valid = false;
+  statusMessage_ = "Marking points inside freeform selection...";
+}
+
 void Application::CancelDeletionWorkflow() {
   if (!deletionConfirmPending_) {
     return;
@@ -2029,6 +2373,8 @@ void Application::CancelDeletionWorkflow() {
   deletionMarkedPointIndices_.clear();
   deletionCandidateIndices_.clear();
   deletionSelectionSpheres_.clear();
+  deletionFreeformPolygon_.clear();
+  deletionFreeformHideBoxes_.clear();
   deletionConfirmPending_ = false;
   deletionMarkedCount_ = 0;
   deletionWorkflowState_ = DeletionWorkflowState::kIdle;
@@ -2053,6 +2399,10 @@ void Application::ConfirmDeletion() {
   deletionProcessCursor_ = 0;
   deletionWorkingPoints_.clear();
   deletionWorkingPoints_.reserve(currentCloud_.points.size() - deletionMarkedPointIndices_.size());
+  deletionSelectionSpheres_.clear();
+  deletionCandidateIndices_.clear();
+  deletionFreeformPolygon_.clear();
+  deletionFreeformHideBoxes_.clear();
   ClearPointSelections();
   hoveredPointActive_ = false;
   hoverPickCache_.valid = false;
@@ -2686,7 +3036,7 @@ void Application::HandleCameraInput() {
     StartOpenDialog();
   }
   openShortcutLatched_ = openShortcutPressed;
-  interactionActive_ = hideBoxGizmoDrag_.active || pointScaleDrag_.active;
+  interactionActive_ = hideBoxGizmoDrag_.active || pointScaleDrag_.active || freeformSelection_.active;
 
   const bool gizmoCapturingLeftMouse =
     hideBoxGizmoDrag_.active ||
@@ -2723,6 +3073,25 @@ void Application::HandleCameraInput() {
 
 void Application::HandleDeletionInput() {
   ImGuiIO& io = ImGui::GetIO();
+
+  const bool escapePressed = glfwGetKey(window_, GLFW_KEY_ESCAPE) == GLFW_PRESS;
+  if (!escapePressed) {
+    escapeLatched_ = false;
+  } else if (!escapeLatched_ && !io.WantTextInput) {
+    escapeLatched_ = true;
+    if (freeformSelection_.pending || freeformSelection_.active) {
+      freeformSelection_ = {};
+      hoveredPointActive_ = false;
+      hoverPickCache_.valid = false;
+      statusMessage_ = "Freeform selection cancelled.";
+      return;
+    }
+    if (deletionConfirmPending_) {
+      CancelDeletionWorkflow();
+      return;
+    }
+  }
+
   const bool backspacePressed = glfwGetKey(window_, GLFW_KEY_BACKSPACE) == GLFW_PRESS;
   if (!backspacePressed) {
     backspaceLatched_ = false;
@@ -2757,41 +3126,79 @@ void Application::UpdateDeletionWorkflow() {
   }
 
   if (deletionWorkflowState_ == DeletionWorkflowState::kMarking) {
-    const std::size_t end = (std::min)(deletionCandidateIndices_.size(), deletionProcessCursor_ + kDeletionWorkChunkPoints);
-    for (std::size_t candidateIndex = deletionProcessCursor_; candidateIndex < end; ++candidateIndex) {
-      const std::size_t pointIndex = deletionCandidateIndices_[candidateIndex];
-      if (pointIndex >= currentCloud_.points.size()) {
-        continue;
-      }
-
-      PointVertex& point = currentCloud_.points[pointIndex];
-      if ((point.flags & kPointFlagMarkedForDeletion) != 0) {
-        continue;
-      }
-
-      const Vec3 position = PointPosition(point);
-      bool marked = false;
-      for (std::size_t sphereIndex = 0; sphereIndex < deletionSelectionSpheres_.size(); ++sphereIndex) {
-        if (IsInsideSphere(position, deletionSelectionSpheres_[sphereIndex])) {
-          marked = true;
-          break;
+    if (!deletionSelectionSpheres_.empty()) {
+      const std::size_t end = (std::min)(deletionCandidateIndices_.size(), deletionProcessCursor_ + kDeletionWorkChunkPoints);
+      for (std::size_t candidateIndex = deletionProcessCursor_; candidateIndex < end; ++candidateIndex) {
+        const std::size_t pointIndex = deletionCandidateIndices_[candidateIndex];
+        if (pointIndex >= currentCloud_.points.size()) {
+          continue;
         }
+
+        PointVertex& point = currentCloud_.points[pointIndex];
+        if ((point.flags & kPointFlagMarkedForDeletion) != 0) {
+          continue;
+        }
+
+        const Vec3 position = PointPosition(point);
+        bool marked = false;
+        for (std::size_t sphereIndex = 0; sphereIndex < deletionSelectionSpheres_.size(); ++sphereIndex) {
+          if (IsInsideSphere(position, deletionSelectionSpheres_[sphereIndex])) {
+            marked = true;
+            break;
+          }
+          if (
+            sphereIndex > 0 &&
+            IsInsideConnector(position, deletionSelectionSpheres_[sphereIndex - 1], deletionSelectionSpheres_[sphereIndex])) {
+            marked = true;
+            break;
+          }
+        }
+        if (!marked) {
+          continue;
+        }
+        point.flags |= kPointFlagMarkedForDeletion;
+        deletionMarkedPointIndices_.push_back(pointIndex);
+      }
+      deletionProcessCursor_ = end;
+      if (deletionProcessCursor_ < deletionCandidateIndices_.size()) {
+        return;
+      }
+    } else {
+      const std::size_t end = (std::min)(currentCloud_.points.size(), deletionProcessCursor_ + kDeletionWorkChunkPoints);
+      for (std::size_t pointIndex = deletionProcessCursor_; pointIndex < end; ++pointIndex) {
+        PointVertex& point = currentCloud_.points[pointIndex];
+        if ((point.flags & kPointFlagMarkedForDeletion) != 0) {
+          continue;
+        }
+
+        const Vec3 position = PointPosition(point);
+        if (IsPointHidden(position, deletionFreeformHideBoxes_)) {
+          continue;
+        }
+
+        ImVec2 screenPoint;
         if (
-          sphereIndex > 0 &&
-          IsInsideConnector(position, deletionSelectionSpheres_[sphereIndex - 1], deletionSelectionSpheres_[sphereIndex])) {
-          marked = true;
-          break;
+          !ProjectToScreen(
+            position,
+            deletionFreeformViewProjection_,
+            deletionFreeformViewportOrigin_,
+            deletionFreeformViewportSize_,
+            screenPoint) ||
+          screenPoint.x < deletionFreeformMinScreen_.x ||
+          screenPoint.x > deletionFreeformMaxScreen_.x ||
+          screenPoint.y < deletionFreeformMinScreen_.y ||
+          screenPoint.y > deletionFreeformMaxScreen_.y ||
+          !IsInsideScreenPolygon(deletionFreeformPolygon_, screenPoint)) {
+          continue;
         }
+
+        point.flags |= kPointFlagMarkedForDeletion;
+        deletionMarkedPointIndices_.push_back(pointIndex);
       }
-      if (!marked) {
-        continue;
+      deletionProcessCursor_ = end;
+      if (deletionProcessCursor_ < currentCloud_.points.size()) {
+        return;
       }
-      point.flags |= kPointFlagMarkedForDeletion;
-      deletionMarkedPointIndices_.push_back(pointIndex);
-    }
-    deletionProcessCursor_ = end;
-    if (deletionProcessCursor_ < deletionCandidateIndices_.size()) {
-      return;
     }
 
     renderer_.UpdatePointCloud(currentCloud_.points, currentCloud_.bounds);
@@ -2801,16 +3208,21 @@ void Application::UpdateDeletionWorkflow() {
     } else {
       visiblePointCountAccurate_ = false;
     }
+    const bool usedSphereSelection = !deletionSelectionSpheres_.empty();
     deletionMarkedCount_ = deletionMarkedPointIndices_.size();
     deletionConfirmPending_ = deletionMarkedCount_ > 0;
     deletionWorkflowState_ = deletionConfirmPending_ ? DeletionWorkflowState::kConfirmPending : DeletionWorkflowState::kIdle;
     deletionCandidateIndices_.clear();
     deletionSelectionSpheres_.clear();
+    deletionFreeformPolygon_.clear();
+    deletionFreeformHideBoxes_.clear();
     deletionProcessCursor_ = 0;
     if (deletionConfirmPending_) {
       statusMessage_ = "Marked " + std::to_string(deletionMarkedCount_) + " points for deletion. Press Backspace again to confirm.";
-    } else {
+    } else if (usedSphereSelection) {
       statusMessage_ = "No points fell inside the selected spheres.";
+    } else {
+      statusMessage_ = "No visible points fell inside the freeform selection.";
     }
     return;
   }
@@ -2836,6 +3248,9 @@ void Application::UpdateDeletionWorkflow() {
   deletionMarkedCount_ = 0;
   deletionWorkflowState_ = DeletionWorkflowState::kIdle;
   deletionSelectionSpheres_.clear();
+  deletionCandidateIndices_.clear();
+  deletionFreeformPolygon_.clear();
+  deletionFreeformHideBoxes_.clear();
   deletionProcessCursor_ = 0;
   InvalidateDeletionSpatialIndex();
   RebuildPointCloudRenderer();
@@ -2886,13 +3301,17 @@ void Application::OpenPointCloud(const std::filesystem::path& path) {
   ResetHideBoxGizmo();
   ClearPointSelections();
   hoverPickCache_.valid = false;
+  freeformSelection_ = {};
   backspaceLatched_ = false;
+  escapeLatched_ = false;
   deletionConfirmPending_ = false;
   deletionMarkedCount_ = 0;
   deletionWorkflowState_ = DeletionWorkflowState::kIdle;
   deletionMarkedPointIndices_.clear();
   deletionCandidateIndices_.clear();
   deletionSelectionSpheres_.clear();
+  deletionFreeformPolygon_.clear();
+  deletionFreeformHideBoxes_.clear();
   deletionWorkingPoints_.clear();
   deletionProcessCursor_ = 0;
   selectIsolatedDialogOpen_ = false;
@@ -2949,6 +3368,7 @@ void Application::ClearPointSelections() {
   pointScaleHandleHovered_ = false;
   pointScaleHandleHotSelection_ = -1;
   pointScaleDrag_ = {};
+  freeformSelection_ = {};
   pointContextMenuSelection_ = -1;
   pointContextMenuOpenRequested_ = false;
 }
