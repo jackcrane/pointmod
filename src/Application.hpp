@@ -53,6 +53,14 @@ class Application {
     Vec3 planeNormal = {0.0f, 0.0f, 1.0f};
   };
 
+  struct HoverPickCache {
+    bool valid = false;
+    float mouseX = 0.0f;
+    float mouseY = 0.0f;
+    Vec3 cameraPosition = {0.0f, 0.0f, 0.0f};
+    Vec3 cameraTarget = {0.0f, 0.0f, 0.0f};
+  };
+
   void InitializeWindow();
   void InitializeImGui();
   void Shutdown();
@@ -125,6 +133,7 @@ class Application {
   int activePointSelection_ = -1;
   bool hoveredPointActive_ = false;
   std::size_t hoveredPointIndex_ = 0;
+  HoverPickCache hoverPickCache_;
   bool pointScaleHandleHovered_ = false;
   int pointScaleHandleHotSelection_ = -1;
   PointScaleDragState pointScaleDrag_;

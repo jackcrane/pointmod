@@ -30,6 +30,7 @@ constexpr float kPointClickPaddingPixels = 14.0f;
 constexpr float kPointScaleHandleRadiusPixels = 10.0f;
 constexpr float kPointSelectionDefaultRadius = 0.1f;
 constexpr float kPointSelectionMinRadius = 0.0025f;
+constexpr std::size_t kHoverPickTargetPoints = 120'000;
 constexpr float kRadiansToDegrees = 57.2957795131f;
 constexpr float kRotationDragPlaneEpsilon = 0.0001f;
 constexpr float kInteractionTargetFpsMin = 45.0f;
@@ -260,6 +261,25 @@ bool IsPointHidden(const Vec3& point, const std::vector<HideBox>& hideBoxes) {
 
 float ComputePickRadiusPixels(float pointSize, float paddingPixels) {
   return (std::max)(pointSize * 0.75f + paddingPixels, paddingPixels);
+}
+
+std::size_t HoverPickStep(std::size_t pointCount) {
+  if (pointCount <= kHoverPickTargetPoints) {
+    return 1;
+  }
+
+  return (pointCount + kHoverPickTargetPoints - 1) / kHoverPickTargetPoints;
+}
+
+bool NearlyEqual(float a, float b, float epsilon = 0.0001f) {
+  return std::abs(a - b) <= epsilon;
+}
+
+bool NearlyEqual(const Vec3& a, const Vec3& b, float epsilon = 0.0001f) {
+  return
+    NearlyEqual(a.x, b.x, epsilon) &&
+    NearlyEqual(a.y, b.y, epsilon) &&
+    NearlyEqual(a.z, b.z, epsilon);
 }
 
 Vec3 BuildScaleHandleDirection(const OrbitCamera& camera) {
@@ -1135,13 +1155,14 @@ void Application::UpdateHideBoxGizmo() {
 }
 
 void Application::UpdatePointSelectionInteraction() {
-  hoveredPointActive_ = false;
   pointScaleHandleHovered_ = false;
   pointScaleHandleHotSelection_ = -1;
 
   ImGuiIO& io = ImGui::GetIO();
   const ImGuiViewport* viewport = ImGui::GetMainViewport();
   if (viewport == nullptr) {
+    hoveredPointActive_ = false;
+    hoverPickCache_.valid = false;
     pointScaleDrag_ = {};
     return;
   }
@@ -1159,6 +1180,8 @@ void Application::UpdatePointSelectionInteraction() {
     viewportSize.x <= 0.0f ||
     viewportSize.y <= 0.0f ||
     currentCloud_.points.empty()) {
+    hoveredPointActive_ = false;
+    hoverPickCache_.valid = false;
     pointScaleDrag_ = {};
     return;
   }
@@ -1239,11 +1262,15 @@ void Application::UpdatePointSelectionInteraction() {
   }
 
   if (!mouseInViewport || io.WantCaptureMouse || hideBoxGizmoDrag_.active || hideBoxGizmoHovered_) {
+    hoveredPointActive_ = false;
+    hoverPickCache_.valid = false;
     drawScaleHandles();
     return;
   }
 
   if (ImGui::IsMouseDown(1) || ImGui::IsMouseDown(2)) {
+    hoveredPointActive_ = false;
+    hoverPickCache_.valid = false;
     drawScaleHandles();
     return;
   }
@@ -1295,19 +1322,36 @@ void Application::UpdatePointSelectionInteraction() {
     return;
   }
 
-  const PointPickResult hoverPick = PickPoint(
-    currentCloud_.points,
-    camera_,
-    viewProjection,
-    viewportOrigin,
-    viewportSize,
-    mousePosition,
-    ComputePickRadiusPixels(pointSize_, kPointHoverPaddingPixels),
-    committedHideBoxes_,
-    1);
-  if (hoverPick.hit) {
-    hoveredPointActive_ = true;
-    hoveredPointIndex_ = hoverPick.pointIndex;
+  const Vec3 cameraPosition = camera_.Position();
+  const Vec3 cameraTarget = camera_.Target();
+  const bool hoverMouseChanged =
+    !hoverPickCache_.valid ||
+    std::abs(hoverPickCache_.mouseX - mousePosition.x) >= 0.5f ||
+    std::abs(hoverPickCache_.mouseY - mousePosition.y) >= 0.5f;
+  const bool hoverCameraChanged =
+    !hoverPickCache_.valid ||
+    !NearlyEqual(hoverPickCache_.cameraPosition, cameraPosition) ||
+    !NearlyEqual(hoverPickCache_.cameraTarget, cameraTarget);
+  if (hoverMouseChanged || hoverCameraChanged) {
+    const PointPickResult hoverPick = PickPoint(
+      currentCloud_.points,
+      camera_,
+      viewProjection,
+      viewportOrigin,
+      viewportSize,
+      mousePosition,
+      ComputePickRadiusPixels(pointSize_, kPointHoverPaddingPixels),
+      committedHideBoxes_,
+      HoverPickStep(currentCloud_.points.size()));
+    hoveredPointActive_ = hoverPick.hit;
+    if (hoverPick.hit) {
+      hoveredPointIndex_ = hoverPick.pointIndex;
+    }
+    hoverPickCache_.valid = true;
+    hoverPickCache_.mouseX = mousePosition.x;
+    hoverPickCache_.mouseY = mousePosition.y;
+    hoverPickCache_.cameraPosition = cameraPosition;
+    hoverPickCache_.cameraTarget = cameraTarget;
   }
 
   if (!ImGui::IsMouseClicked(0)) {
@@ -1332,6 +1376,7 @@ void Application::UpdatePointSelectionInteraction() {
 
   hoveredPointActive_ = true;
   hoveredPointIndex_ = clickPick.pointIndex;
+  hoverPickCache_.valid = false;
 
   for (std::size_t selectionIndex = 0; selectionIndex < pointSelections_.size(); ++selectionIndex) {
     if (pointSelections_[selectionIndex].pointIndex == clickPick.pointIndex) {
@@ -1628,6 +1673,7 @@ void Application::OpenPointCloud(const std::filesystem::path& path) {
   selectedHideBox_ = -1;
   ResetHideBoxGizmo();
   ClearPointSelections();
+  hoverPickCache_.valid = false;
   currentCloud_.sourcePath = path;
   cameraFramed_ = false;
   cameraTouched_ = false;
@@ -1668,6 +1714,7 @@ void Application::ClearPointSelections() {
   pointSelections_.clear();
   activePointSelection_ = -1;
   hoveredPointActive_ = false;
+  hoverPickCache_.valid = false;
   pointScaleHandleHovered_ = false;
   pointScaleHandleHotSelection_ = -1;
   pointScaleDrag_ = {};
@@ -1675,6 +1722,7 @@ void Application::ClearPointSelections() {
 
 void Application::CommitHideBoxes() {
   committedHideBoxes_ = hideBoxes_;
+  hoverPickCache_.valid = false;
   renderer_.SetHideBoxes(committedHideBoxes_);
   if (committedHideBoxes_.empty()) {
     visiblePointCount_ = static_cast<std::uint64_t>(currentCloud_.points.size());
