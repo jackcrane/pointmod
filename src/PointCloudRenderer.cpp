@@ -266,6 +266,47 @@ void AppendSelectionSphereSurface(std::vector<PointVertex>& vertices, const Sele
   }
 }
 
+void BuildOrthonormalBasis(const Vec3& axis, Vec3& tangent, Vec3& bitangent) {
+  const Vec3 upHint = std::abs(axis.z) < 0.95f ? Vec3{0.0f, 0.0f, 1.0f} : Vec3{0.0f, 1.0f, 0.0f};
+  tangent = Normalize(Cross(axis, upHint));
+  if (Length(tangent) <= 0.00001f) {
+    tangent = {1.0f, 0.0f, 0.0f};
+  }
+  bitangent = Normalize(Cross(axis, tangent));
+}
+
+void AppendConnectorSurface(
+  std::vector<PointVertex>& vertices,
+  const SelectionSphere& start,
+  const SelectionSphere& end) {
+  const Vec3 axis = end.center - start.center;
+  const float axisLength = Length(axis);
+  if (axisLength <= 0.00001f) {
+    return;
+  }
+
+  Vec3 tangent;
+  Vec3 bitangent;
+  BuildOrthonormalBasis(axis / axisLength, tangent, bitangent);
+
+  for (int segmentIndex = 0; segmentIndex < kSphereLongitudeSegments; ++segmentIndex) {
+    const float angleA = static_cast<float>(segmentIndex) / static_cast<float>(kSphereLongitudeSegments) * 6.28318530718f;
+    const float angleB = static_cast<float>(segmentIndex + 1) / static_cast<float>(kSphereLongitudeSegments) * 6.28318530718f;
+
+    const Vec3 startOffsetA = tangent * (std::cos(angleA) * start.radius) + bitangent * (std::sin(angleA) * start.radius);
+    const Vec3 startOffsetB = tangent * (std::cos(angleB) * start.radius) + bitangent * (std::sin(angleB) * start.radius);
+    const Vec3 endOffsetA = tangent * (std::cos(angleA) * end.radius) + bitangent * (std::sin(angleA) * end.radius);
+    const Vec3 endOffsetB = tangent * (std::cos(angleB) * end.radius) + bitangent * (std::sin(angleB) * end.radius);
+
+    const Vec3 a = start.center + startOffsetA;
+    const Vec3 b = end.center + endOffsetA;
+    const Vec3 c = end.center + endOffsetB;
+    const Vec3 d = start.center + startOffsetB;
+    AppendTriangle(vertices, a, b, c, kSelectionRed, 70, 70, 128);
+    AppendTriangle(vertices, a, c, d, kSelectionRed, 70, 70, 128);
+  }
+}
+
 float DistanceToBounds(const Bounds& bounds, const Vec3& point) {
   const float dx = (std::max)((std::max)(bounds.min.x - point.x, 0.0f), point.x - bounds.max.x);
   const float dy = (std::max)((std::max)(bounds.min.y - point.y, 0.0f), point.y - bounds.max.y);
@@ -643,9 +684,15 @@ void PointCloudRenderer::RenderSelectionOverlay(
   bool drawHoveredPoint,
   const Vec3& hoveredPoint) const {
   std::vector<PointVertex> surfaceVertices;
-  surfaceVertices.reserve(selectionSpheres.size() * static_cast<std::size_t>(kSphereLatitudeSegments * kSphereLongitudeSegments * 6));
-  for (const SelectionSphere& sphere : selectionSpheres) {
+  surfaceVertices.reserve(
+    selectionSpheres.size() * static_cast<std::size_t>(kSphereLatitudeSegments * kSphereLongitudeSegments * 6) +
+    (selectionSpheres.size() > 1 ? (selectionSpheres.size() - 1) * static_cast<std::size_t>(kSphereLongitudeSegments * 6) : 0));
+  for (std::size_t sphereIndex = 0; sphereIndex < selectionSpheres.size(); ++sphereIndex) {
+    const SelectionSphere& sphere = selectionSpheres[sphereIndex];
     AppendSelectionSphereSurface(surfaceVertices, sphere);
+    if (sphereIndex > 0) {
+      AppendConnectorSurface(surfaceVertices, selectionSpheres[sphereIndex - 1], sphere);
+    }
   }
 
   std::vector<PointVertex> lineVertices;
