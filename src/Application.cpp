@@ -638,9 +638,15 @@ void Application::InitializeWindow() {
     app->OpenPointCloud(std::filesystem::path(paths[0]));
   });
 
-  InstallNativeMenu(
+  const bool nativeMenuInstalled = InstallNativeMenu(
+    window_,
     [this]() { StartOpenDialog(); },
     [this]() { ResetView(); });
+#if defined(__APPLE__)
+  useImGuiMenuBar_ = false;
+#else
+  useImGuiMenuBar_ = !nativeMenuInstalled;
+#endif
 }
 
 void Application::InitializeImGui() {
@@ -670,6 +676,7 @@ void Application::Shutdown() {
   }
 
   if (window_ != nullptr) {
+    UninstallNativeMenu(window_);
     glfwDestroyWindow(window_);
     window_ = nullptr;
   }
@@ -692,10 +699,61 @@ void Application::EndImGuiFrame() {
   glfwSwapBuffers(window_);
 }
 
+float Application::RenderMenuBar() {
+  if (!useImGuiMenuBar_) {
+    return 0.0f;
+  }
+
+  float menuBarHeight = 0.0f;
+  if (ImGui::BeginMainMenuBar()) {
+    const bool hasLoadedCloud = !currentCloud_.points.empty();
+    const bool hasHideBoxes = !hideBoxes_.empty();
+    const bool hasPointSelections = !pointSelections_.empty();
+
+    if (ImGui::BeginMenu("File")) {
+      if (ImGui::MenuItem("Open...", "Ctrl+O")) {
+        StartOpenDialog();
+      }
+      ImGui::Separator();
+      if (ImGui::MenuItem("Quit")) {
+        glfwSetWindowShouldClose(window_, GLFW_TRUE);
+      }
+      ImGui::EndMenu();
+    }
+
+    if (ImGui::BeginMenu("View")) {
+      if (ImGui::MenuItem("Reset view", nullptr, false, hasLoadedCloud)) {
+        ResetView();
+      }
+      ImGui::MenuItem(hideBoxesVisible_ ? "Hide boxes" : "Show boxes", nullptr, &hideBoxesVisible_, hasHideBoxes);
+      ImGui::EndMenu();
+    }
+
+    if (ImGui::BeginMenu("Selection")) {
+      if (ImGui::MenuItem("Add hide box", nullptr, false, hasLoadedCloud)) {
+        AddHideBox();
+      }
+      if (ImGui::MenuItem("Delete all hide boxes", nullptr, false, hasHideBoxes)) {
+        ClearHideBoxes();
+      }
+      if (ImGui::MenuItem("Clear point spheres", nullptr, false, hasPointSelections)) {
+        ClearPointSelections();
+      }
+      ImGui::EndMenu();
+    }
+
+    menuBarHeight = ImGui::GetWindowSize().y;
+    ImGui::EndMainMenuBar();
+  }
+
+  return menuBarHeight;
+}
+
 void Application::RenderUi() {
+  const float menuBarHeight = RenderMenuBar();
   const ImGuiViewport* viewport = ImGui::GetMainViewport();
   ImGui::SetNextWindowPos(
-    ImVec2(viewport->WorkPos.x + 20.0f, viewport->WorkPos.y + 20.0f),
+    ImVec2(viewport->Pos.x + 20.0f, viewport->Pos.y + menuBarHeight + 20.0f),
     ImGuiCond_Always);
   ImGui::SetNextWindowSize(ImVec2(430.0f, 560.0f), ImGuiCond_Always);
   ImGui::SetNextWindowBgAlpha(0.82f);

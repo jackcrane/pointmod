@@ -82,6 +82,7 @@ class Application {
   void Shutdown();
   void BeginImGuiFrame();
   void EndImGuiFrame();
+  float RenderMenuBar();
   void RenderUi();
   void RenderScene();
   void UpdateHideBoxGizmo();
@@ -179,6 +180,7 @@ class Application {
   std::unordered_map<DeletionGridKey, std::vector<std::size_t>, DeletionGridKeyHash> deletionGrid_;
   std::vector<std::uint32_t> deletionCandidateStamp_;
   std::uint32_t deletionCandidateStampValue_ = 1;
+  bool useImGuiMenuBar_ = false;
   RenderDetail activeRenderDetail_ = RenderDetail::kFull;
   bool glfwInitialized_ = false;
   bool imguiInitialized_ = false;
