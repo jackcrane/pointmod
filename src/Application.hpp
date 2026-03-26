@@ -25,6 +25,13 @@ class Application {
     kDeleting,
   };
 
+  enum class IsolatedSelectionWorkflowState {
+    kIdle,
+    kCollecting,
+    kSearching,
+    kDeleting,
+  };
+
   enum class HideBoxGizmoMode {
     kMove,
     kScale,
@@ -84,6 +91,18 @@ class Application {
     std::size_t operator()(const DeletionGridKey& key) const;
   };
 
+  struct ExactPointKey {
+    std::uint32_t x = 0;
+    std::uint32_t y = 0;
+    std::uint32_t z = 0;
+
+    bool operator==(const ExactPointKey& other) const = default;
+  };
+
+  struct ExactPointKeyHash {
+    std::size_t operator()(const ExactPointKey& key) const;
+  };
+
   void InitializeWindow();
   void InitializeImGui();
   void Shutdown();
@@ -91,6 +110,7 @@ class Application {
   void EndImGuiFrame();
   float RenderMenuBar();
   void RenderUi();
+  void RenderSelectIsolatedDialog();
   void RenderScene();
   void UpdateHideBoxGizmo();
   void UpdatePointSelectionInteraction();
@@ -100,6 +120,9 @@ class Application {
   void HandleCameraInput();
   void HandleDeletionInput();
   void UpdateDeletionWorkflow();
+  void StartIsolatedSelectionPreview();
+  void StartIsolatedSelectionDeletion();
+  void UpdateIsolatedSelectionWorkflow();
   void StartOpenDialog();
   void ResetView();
   void OpenPointCloud(const std::filesystem::path& path);
@@ -107,6 +130,7 @@ class Application {
   void ClearHideBoxes();
   void ClearPointSelections();
   void DeletePointSelection(int selectionIndex);
+  void ClearIsolatedSelectionPreview();
   void RebuildPointCloudRenderer();
   std::vector<SelectionSphere> BuildSelectionSpheres() const;
   void BeginDeletionMarking();
@@ -192,6 +216,18 @@ class Application {
   std::uint32_t deletionCandidateStampValue_ = 1;
   std::vector<PointVertex> deletionWorkingPoints_;
   std::size_t deletionProcessCursor_ = 0;
+  bool selectIsolatedDialogOpen_ = false;
+  float isolatedNeighborDistance_ = 0.1f;
+  float isolatedPreviewDistance_ = 0.1f;
+  bool isolatedPreviewValid_ = false;
+  std::size_t isolatedMatchedCount_ = 0;
+  IsolatedSelectionWorkflowState isolatedSelectionWorkflowState_ = IsolatedSelectionWorkflowState::kIdle;
+  std::vector<std::size_t> isolatedVisiblePointIndices_;
+  std::vector<std::size_t> isolatedMatchedPointIndices_;
+  std::unordered_map<DeletionGridKey, std::vector<std::size_t>, DeletionGridKeyHash> isolatedSearchGrid_;
+  std::unordered_map<ExactPointKey, std::uint32_t, ExactPointKeyHash> isolatedExactPointCounts_;
+  std::vector<PointVertex> isolatedDeletionWorkingPoints_;
+  std::size_t isolatedProcessCursor_ = 0;
   bool useImGuiMenuBar_ = false;
   RenderDetail activeRenderDetail_ = RenderDetail::kFull;
   bool glfwInitialized_ = false;

@@ -44,7 +44,7 @@ flat out int vHidden;
 const int kPointColorModeSource = 0;
 const int kPointColorModeDepth = 1;
 const int kDepthCurveSampleCount = 32;
-const float kPointFlagMarkedForDeletion = 1.0;
+const float kPointFlagHighlighted = 0.5;
 
 vec4 QuaternionConjugate(vec4 q) {
   return vec4(-q.xyz, q.w);
@@ -68,7 +68,7 @@ void main() {
   gl_PointSize = uPointSize;
   vHidden = 0;
 
-  if (aFlags >= kPointFlagMarkedForDeletion) {
+  if (aFlags >= kPointFlagHighlighted) {
     vColor = vec4(0.92, 0.18, 0.18, 1.0);
   } else if (uColorMode == kPointColorModeDepth) {
     float distanceFromCamera = distance(aPosition, uCameraPosition);

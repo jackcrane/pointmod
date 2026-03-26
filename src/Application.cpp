@@ -11,6 +11,7 @@
 #include <backends/imgui_impl_opengl3.h>
 
 #include <algorithm>
+#include <bit>
 #include <cfloat>
 #include <stdexcept>
 #include <string>
@@ -44,8 +45,10 @@ constexpr float kInteractionPointDropFactor = 0.5f;
 constexpr float kMinInteractionPointFraction = 0.001f;
 constexpr double kInteractionTuneIntervalSeconds = 0.2;
 constexpr std::size_t kDeletionWorkChunkPoints = 200'000;
+constexpr std::size_t kIsolatedWorkChunkPoints = 100'000;
 constexpr Vec3 kWorldUp = {0.0f, 0.0f, 1.0f};
-constexpr std::uint8_t kPointFlagMarkedForDeletion = 1;
+constexpr std::uint8_t kPointFlagIsolatedPreview = 1 << 0;
+constexpr std::uint8_t kPointFlagMarkedForDeletion = 1 << 1;
 
 struct CameraRay {
   Vec3 origin = {0.0f, 0.0f, 0.0f};
@@ -128,6 +131,11 @@ float LengthSquared(const ImVec2& value) {
 
 float DistanceSquared(const ImVec2& a, const ImVec2& b) {
   return LengthSquared(Subtract(a, b));
+}
+
+float DistanceSquared(const Vec3& a, const Vec3& b) {
+  const Vec3 delta = a - b;
+  return Dot(delta, delta);
 }
 
 float Clamp01(float value) {
@@ -568,6 +576,13 @@ std::size_t Application::DeletionGridKeyHash::operator()(const DeletionGridKey& 
   return static_cast<std::size_t>((x * 73856093ULL) ^ (y * 19349663ULL) ^ (z * 83492791ULL));
 }
 
+std::size_t Application::ExactPointKeyHash::operator()(const ExactPointKey& key) const {
+  const std::uint64_t x = key.x;
+  const std::uint64_t y = key.y;
+  const std::uint64_t z = key.z;
+  return static_cast<std::size_t>((x * 73856093ULL) ^ (y * 19349663ULL) ^ (z * 83492791ULL));
+}
+
 int Application::Run() {
   try {
     InitializeWindow();
@@ -585,6 +600,7 @@ int Application::Run() {
       HandleCameraInput();
       HandleDeletionInput();
       UpdateDeletionWorkflow();
+      UpdateIsolatedSelectionWorkflow();
       UpdateFrameStats();
       RenderScene();
       EndImGuiFrame();
@@ -820,6 +836,16 @@ void Application::RenderUi() {
     if (!hasPointSelections) {
       ImGui::EndDisabled();
     }
+    ImGui::SameLine();
+    if (!hasLoadedCloud) {
+      ImGui::BeginDisabled();
+    }
+    if (ImGui::Button("Select isolated")) {
+      selectIsolatedDialogOpen_ = true;
+    }
+    if (!hasLoadedCloud) {
+      ImGui::EndDisabled();
+    }
 
     ImGui::TextWrapped("%s", statusMessage_.c_str());
     ImGui::Separator();
@@ -991,6 +1017,114 @@ void Application::RenderUi() {
     ImGui::End();
   }
 
+  RenderSelectIsolatedDialog();
+}
+
+void Application::RenderSelectIsolatedDialog() {
+  if (!selectIsolatedDialogOpen_) {
+    return;
+  }
+
+  const bool deletionWorkflowBusy =
+    deletionWorkflowState_ != DeletionWorkflowState::kIdle || deletionConfirmPending_;
+  bool dialogOpen = selectIsolatedDialogOpen_;
+  ImGui::SetNextWindowSize(ImVec2(360.0f, 0.0f), ImGuiCond_FirstUseEver);
+  if (ImGui::Begin("Select isolated", &dialogOpen, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize)) {
+    const bool isolatedWorkflowBusy = isolatedSelectionWorkflowState_ != IsolatedSelectionWorkflowState::kIdle;
+    const bool controlsDisabled = currentCloud_.points.empty() || isolatedWorkflowBusy || deletionWorkflowBusy;
+
+    if (controlsDisabled) {
+      ImGui::BeginDisabled();
+    }
+    const float previousDistance = isolatedNeighborDistance_;
+    if (ImGui::InputFloat("Minimum neighbor distance", &isolatedNeighborDistance_, 0.01f, 0.1f, "%.6g")) {
+      if (isolatedPreviewValid_ && isolatedNeighborDistance_ != previousDistance) {
+        ClearIsolatedSelectionPreview();
+      }
+    }
+    if (controlsDisabled) {
+      ImGui::EndDisabled();
+    }
+
+    ImGui::TextWrapped("Checks currently visible points and matches any point with no neighbor within the given distance.");
+
+    if (isolatedSelectionWorkflowState_ == IsolatedSelectionWorkflowState::kCollecting) {
+      const float progress = currentCloud_.points.empty()
+        ? 1.0f
+        : static_cast<float>(isolatedProcessCursor_) / static_cast<float>(currentCloud_.points.size());
+      ImGui::TextUnformatted("Searching isolated points...");
+      ImGui::ProgressBar((std::clamp)(progress, 0.0f, 1.0f), ImVec2(-1.0f, 0.0f));
+      ImGui::Text(
+        "Preparing: %llu / %llu",
+        static_cast<unsigned long long>(isolatedProcessCursor_),
+        static_cast<unsigned long long>(currentCloud_.points.size()));
+    } else if (isolatedSelectionWorkflowState_ == IsolatedSelectionWorkflowState::kSearching) {
+      const float progress = isolatedVisiblePointIndices_.empty()
+        ? 1.0f
+        : static_cast<float>(isolatedProcessCursor_) / static_cast<float>(isolatedVisiblePointIndices_.size());
+      ImGui::TextUnformatted("Searching isolated points...");
+      ImGui::ProgressBar((std::clamp)(progress, 0.0f, 1.0f), ImVec2(-1.0f, 0.0f));
+      ImGui::Text(
+        "Checked: %llu / %llu",
+        static_cast<unsigned long long>(isolatedProcessCursor_),
+        static_cast<unsigned long long>(isolatedVisiblePointIndices_.size()));
+    } else if (isolatedSelectionWorkflowState_ == IsolatedSelectionWorkflowState::kDeleting) {
+      const float progress = currentCloud_.points.empty()
+        ? 1.0f
+        : static_cast<float>(isolatedProcessCursor_) / static_cast<float>(currentCloud_.points.size());
+      ImGui::TextUnformatted("Deleting isolated points...");
+      ImGui::ProgressBar((std::clamp)(progress, 0.0f, 1.0f), ImVec2(-1.0f, 0.0f));
+      ImGui::Text(
+        "Points: %llu / %llu",
+        static_cast<unsigned long long>(isolatedProcessCursor_),
+        static_cast<unsigned long long>(currentCloud_.points.size()));
+    } else if (isolatedPreviewValid_) {
+      ImGui::Text("Matched points: %llu", static_cast<unsigned long long>(isolatedMatchedCount_));
+    }
+
+    if (deletionWorkflowBusy) {
+      ImGui::TextWrapped("Finish or cancel the current sphere deletion workflow before running this search.");
+    } else if (currentCloud_.points.empty()) {
+      ImGui::TextUnformatted("Load a point cloud to use this tool.");
+    }
+
+    if (controlsDisabled) {
+      ImGui::BeginDisabled();
+    }
+    if (ImGui::Button("Preview")) {
+      StartIsolatedSelectionPreview();
+    }
+    if (controlsDisabled) {
+      ImGui::EndDisabled();
+    }
+
+    ImGui::SameLine();
+    const bool canDeleteIsolatedPoints =
+      isolatedSelectionWorkflowState_ == IsolatedSelectionWorkflowState::kIdle &&
+      isolatedPreviewValid_ &&
+      isolatedMatchedCount_ > 0 &&
+      !deletionWorkflowBusy;
+    if (!canDeleteIsolatedPoints) {
+      ImGui::BeginDisabled();
+    }
+    if (ImGui::Button("Delete")) {
+      StartIsolatedSelectionDeletion();
+    }
+    if (!canDeleteIsolatedPoints) {
+      ImGui::EndDisabled();
+    }
+  }
+  ImGui::End();
+
+  if (!dialogOpen) {
+    selectIsolatedDialogOpen_ = false;
+    if (isolatedSelectionWorkflowState_ != IsolatedSelectionWorkflowState::kDeleting) {
+      ClearIsolatedSelectionPreview();
+    }
+    return;
+  }
+
+  selectIsolatedDialogOpen_ = true;
 }
 
 void Application::UpdateHideBoxGizmo() {
@@ -1860,6 +1994,9 @@ std::vector<std::size_t> Application::CollectDeletionCandidateIndices(const std:
 }
 
 void Application::BeginDeletionMarking() {
+  if (isolatedSelectionWorkflowState_ != IsolatedSelectionWorkflowState::kDeleting) {
+    ClearIsolatedSelectionPreview();
+  }
   const std::vector<SelectionSphere> selectionSpheres = BuildSelectionSpheres();
   if (selectionSpheres.empty()) {
     return;
@@ -1923,6 +2060,251 @@ void Application::ConfirmDeletion() {
   pointContextMenuSelection_ = -1;
   pointContextMenuOpenRequested_ = false;
   statusMessage_ = "Deleting marked points...";
+}
+
+void Application::StartIsolatedSelectionPreview() {
+  if (currentCloud_.points.empty()) {
+    return;
+  }
+  if (isolatedSelectionWorkflowState_ != IsolatedSelectionWorkflowState::kIdle) {
+    return;
+  }
+  if (deletionWorkflowState_ != DeletionWorkflowState::kIdle || deletionConfirmPending_) {
+    statusMessage_ = "Finish the current sphere deletion workflow first.";
+    return;
+  }
+  if (!std::isfinite(isolatedNeighborDistance_)) {
+    statusMessage_ = "Minimum neighbor distance must be finite.";
+    return;
+  }
+
+  ClearIsolatedSelectionPreview();
+  isolatedPreviewDistance_ = isolatedNeighborDistance_;
+  isolatedMatchedCount_ = 0;
+  isolatedVisiblePointIndices_.clear();
+  isolatedMatchedPointIndices_.clear();
+  isolatedSearchGrid_.clear();
+  isolatedExactPointCounts_.clear();
+  isolatedDeletionWorkingPoints_.clear();
+  isolatedProcessCursor_ = 0;
+  isolatedSelectionWorkflowState_ = IsolatedSelectionWorkflowState::kCollecting;
+  statusMessage_ = "Searching for isolated points...";
+}
+
+void Application::StartIsolatedSelectionDeletion() {
+  if (isolatedSelectionWorkflowState_ != IsolatedSelectionWorkflowState::kIdle) {
+    return;
+  }
+  if (!isolatedPreviewValid_ || isolatedMatchedPointIndices_.empty()) {
+    return;
+  }
+
+  isolatedSelectionWorkflowState_ = IsolatedSelectionWorkflowState::kDeleting;
+  isolatedProcessCursor_ = 0;
+  isolatedDeletionWorkingPoints_.clear();
+  isolatedDeletionWorkingPoints_.reserve(currentCloud_.points.size() - isolatedMatchedPointIndices_.size());
+  ClearPointSelections();
+  hoveredPointActive_ = false;
+  hoverPickCache_.valid = false;
+  pointContextMenuSelection_ = -1;
+  pointContextMenuOpenRequested_ = false;
+  statusMessage_ = "Deleting isolated points...";
+}
+
+void Application::UpdateIsolatedSelectionWorkflow() {
+  if (isolatedSelectionWorkflowState_ == IsolatedSelectionWorkflowState::kIdle) {
+    return;
+  }
+
+  if (isolatedSelectionWorkflowState_ == IsolatedSelectionWorkflowState::kCollecting) {
+    const std::size_t end = (std::min)(currentCloud_.points.size(), isolatedProcessCursor_ + kIsolatedWorkChunkPoints);
+    for (std::size_t pointIndex = isolatedProcessCursor_; pointIndex < end; ++pointIndex) {
+      const Vec3 position = PointPosition(currentCloud_.points[pointIndex]);
+      if (IsPointHidden(position, committedHideBoxes_)) {
+        continue;
+      }
+
+      isolatedVisiblePointIndices_.push_back(pointIndex);
+      if (isolatedPreviewDistance_ < 0.0f) {
+        continue;
+      }
+      if (isolatedPreviewDistance_ == 0.0f) {
+        const ExactPointKey key{
+          .x = std::bit_cast<std::uint32_t>(position.x),
+          .y = std::bit_cast<std::uint32_t>(position.y),
+          .z = std::bit_cast<std::uint32_t>(position.z),
+        };
+        ++isolatedExactPointCounts_[key];
+        continue;
+      }
+
+      const float cellSize = isolatedPreviewDistance_;
+      const DeletionGridKey cellKey{
+        .x = static_cast<int>(std::floor(position.x / cellSize)),
+        .y = static_cast<int>(std::floor(position.y / cellSize)),
+        .z = static_cast<int>(std::floor(position.z / cellSize)),
+      };
+      isolatedSearchGrid_[cellKey].push_back(pointIndex);
+    }
+
+    isolatedProcessCursor_ = end;
+    if (isolatedProcessCursor_ < currentCloud_.points.size()) {
+      return;
+    }
+
+    isolatedProcessCursor_ = 0;
+    isolatedSelectionWorkflowState_ = IsolatedSelectionWorkflowState::kSearching;
+    if (isolatedVisiblePointIndices_.empty()) {
+      renderer_.UpdatePointCloud(currentCloud_.points, currentCloud_.bounds);
+      isolatedPreviewValid_ = true;
+      isolatedMatchedCount_ = 0;
+      isolatedSelectionWorkflowState_ = IsolatedSelectionWorkflowState::kIdle;
+      statusMessage_ = "No visible points matched the isolated-point search.";
+    }
+    return;
+  }
+
+  if (isolatedSelectionWorkflowState_ == IsolatedSelectionWorkflowState::kSearching) {
+    const std::size_t end = (std::min)(isolatedVisiblePointIndices_.size(), isolatedProcessCursor_ + kIsolatedWorkChunkPoints);
+    const float thresholdSquared = isolatedPreviewDistance_ * isolatedPreviewDistance_;
+    for (std::size_t visibleIndex = isolatedProcessCursor_; visibleIndex < end; ++visibleIndex) {
+      const std::size_t pointIndex = isolatedVisiblePointIndices_[visibleIndex];
+      const Vec3 position = PointPosition(currentCloud_.points[pointIndex]);
+
+      bool isolated = false;
+      if (isolatedPreviewDistance_ < 0.0f) {
+        isolated = true;
+      } else if (isolatedPreviewDistance_ == 0.0f) {
+        const ExactPointKey key{
+          .x = std::bit_cast<std::uint32_t>(position.x),
+          .y = std::bit_cast<std::uint32_t>(position.y),
+          .z = std::bit_cast<std::uint32_t>(position.z),
+        };
+        const auto it = isolatedExactPointCounts_.find(key);
+        isolated = it != isolatedExactPointCounts_.end() && it->second <= 1;
+      } else {
+        const float cellSize = isolatedPreviewDistance_;
+        const DeletionGridKey baseKey{
+          .x = static_cast<int>(std::floor(position.x / cellSize)),
+          .y = static_cast<int>(std::floor(position.y / cellSize)),
+          .z = static_cast<int>(std::floor(position.z / cellSize)),
+        };
+        isolated = true;
+        for (int dx = -1; dx <= 1 && isolated; ++dx) {
+          for (int dy = -1; dy <= 1 && isolated; ++dy) {
+            for (int dz = -1; dz <= 1; ++dz) {
+              const auto cellIt = isolatedSearchGrid_.find(DeletionGridKey{
+                .x = baseKey.x + dx,
+                .y = baseKey.y + dy,
+                .z = baseKey.z + dz,
+              });
+              if (cellIt == isolatedSearchGrid_.end()) {
+                continue;
+              }
+              for (std::size_t otherPointIndex : cellIt->second) {
+                if (otherPointIndex == pointIndex) {
+                  continue;
+                }
+                if (DistanceSquared(position, PointPosition(currentCloud_.points[otherPointIndex])) <= thresholdSquared) {
+                  isolated = false;
+                  break;
+                }
+              }
+              if (!isolated) {
+                break;
+              }
+            }
+          }
+        }
+      }
+
+      if (!isolated) {
+        continue;
+      }
+
+      currentCloud_.points[pointIndex].flags |= kPointFlagIsolatedPreview;
+      isolatedMatchedPointIndices_.push_back(pointIndex);
+    }
+
+    isolatedProcessCursor_ = end;
+    if (isolatedProcessCursor_ < isolatedVisiblePointIndices_.size()) {
+      return;
+    }
+
+    renderer_.UpdatePointCloud(currentCloud_.points, currentCloud_.bounds);
+    isolatedMatchedCount_ = isolatedMatchedPointIndices_.size();
+    isolatedPreviewValid_ = true;
+    isolatedVisiblePointIndices_.clear();
+    isolatedSearchGrid_.clear();
+    isolatedExactPointCounts_.clear();
+    isolatedProcessCursor_ = 0;
+    isolatedSelectionWorkflowState_ = IsolatedSelectionWorkflowState::kIdle;
+    if (isolatedMatchedCount_ > 0) {
+      statusMessage_ = "Previewing " + std::to_string(isolatedMatchedCount_) + " isolated points.";
+    } else {
+      statusMessage_ = "No isolated visible points matched the search.";
+    }
+    return;
+  }
+
+  const std::size_t end = (std::min)(currentCloud_.points.size(), isolatedProcessCursor_ + kDeletionWorkChunkPoints);
+  for (std::size_t pointIndex = isolatedProcessCursor_; pointIndex < end; ++pointIndex) {
+    const PointVertex& point = currentCloud_.points[pointIndex];
+    if ((point.flags & kPointFlagIsolatedPreview) != 0) {
+      continue;
+    }
+    isolatedDeletionWorkingPoints_.push_back(point);
+  }
+
+  isolatedProcessCursor_ = end;
+  if (isolatedProcessCursor_ < currentCloud_.points.size()) {
+    return;
+  }
+
+  const std::size_t deletedPointCount = isolatedMatchedPointIndices_.size();
+  currentCloud_.points = std::move(isolatedDeletionWorkingPoints_);
+  isolatedDeletionWorkingPoints_.clear();
+  isolatedVisiblePointIndices_.clear();
+  isolatedMatchedPointIndices_.clear();
+  isolatedSearchGrid_.clear();
+  isolatedExactPointCounts_.clear();
+  isolatedMatchedCount_ = 0;
+  isolatedPreviewValid_ = false;
+  isolatedSelectionWorkflowState_ = IsolatedSelectionWorkflowState::kIdle;
+  isolatedProcessCursor_ = 0;
+  InvalidateDeletionSpatialIndex();
+  RebuildPointCloudRenderer();
+  if (!cameraTouched_ && currentCloud_.bounds.IsValid()) {
+    camera_.Frame(currentCloud_.bounds);
+    cameraFramed_ = true;
+  }
+  statusMessage_ = "Deleted " + std::to_string(deletedPointCount) + " isolated points.";
+}
+
+void Application::ClearIsolatedSelectionPreview() {
+  for (std::size_t pointIndex : isolatedMatchedPointIndices_) {
+    if (pointIndex >= currentCloud_.points.size()) {
+      continue;
+    }
+    currentCloud_.points[pointIndex].flags &= static_cast<std::uint8_t>(~kPointFlagIsolatedPreview);
+  }
+
+  const bool hadPreview = isolatedPreviewValid_ || !isolatedMatchedPointIndices_.empty();
+  isolatedVisiblePointIndices_.clear();
+  isolatedMatchedPointIndices_.clear();
+  isolatedSearchGrid_.clear();
+  isolatedExactPointCounts_.clear();
+  isolatedDeletionWorkingPoints_.clear();
+  isolatedMatchedCount_ = 0;
+  isolatedPreviewValid_ = false;
+  isolatedProcessCursor_ = 0;
+  if (isolatedSelectionWorkflowState_ != IsolatedSelectionWorkflowState::kDeleting) {
+    isolatedSelectionWorkflowState_ = IsolatedSelectionWorkflowState::kIdle;
+  }
+
+  if (hadPreview) {
+    renderer_.UpdatePointCloud(currentCloud_.points, currentCloud_.bounds);
+  }
 }
 
 void Application::UpdateCloudLoading() {
@@ -2289,6 +2671,16 @@ void Application::OpenPointCloud(const std::filesystem::path& path) {
   deletionSelectionSpheres_.clear();
   deletionWorkingPoints_.clear();
   deletionProcessCursor_ = 0;
+  selectIsolatedDialogOpen_ = false;
+  isolatedPreviewValid_ = false;
+  isolatedMatchedCount_ = 0;
+  isolatedSelectionWorkflowState_ = IsolatedSelectionWorkflowState::kIdle;
+  isolatedVisiblePointIndices_.clear();
+  isolatedMatchedPointIndices_.clear();
+  isolatedSearchGrid_.clear();
+  isolatedExactPointCounts_.clear();
+  isolatedDeletionWorkingPoints_.clear();
+  isolatedProcessCursor_ = 0;
   InvalidateDeletionSpatialIndex();
   currentCloud_.sourcePath = path;
   cameraFramed_ = false;
@@ -2367,6 +2759,9 @@ void Application::DeletePointSelection(int selectionIndex) {
 }
 
 void Application::CommitHideBoxes() {
+  if (isolatedSelectionWorkflowState_ != IsolatedSelectionWorkflowState::kDeleting) {
+    ClearIsolatedSelectionPreview();
+  }
   committedHideBoxes_ = hideBoxes_;
   hoverPickCache_.valid = false;
   renderer_.SetHideBoxes(committedHideBoxes_);
