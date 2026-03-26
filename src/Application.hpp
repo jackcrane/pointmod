@@ -29,6 +29,7 @@ class Application {
     kIdle,
     kCollecting,
     kSearching,
+    kFinalizing,
     kDeleting,
   };
 
@@ -222,11 +223,13 @@ class Application {
   bool isolatedPreviewValid_ = false;
   std::size_t isolatedMatchedCount_ = 0;
   IsolatedSelectionWorkflowState isolatedSelectionWorkflowState_ = IsolatedSelectionWorkflowState::kIdle;
-  std::vector<std::size_t> isolatedVisiblePointIndices_;
   std::vector<std::size_t> isolatedMatchedPointIndices_;
+  std::vector<DeletionGridKey> isolatedSearchCellKeys_;
   std::unordered_map<DeletionGridKey, std::vector<std::size_t>, DeletionGridKeyHash> isolatedSearchGrid_;
   std::unordered_map<ExactPointKey, std::uint32_t, ExactPointKeyHash> isolatedExactPointCounts_;
+  std::vector<std::uint8_t> isolatedPointHasNeighbor_;
   std::vector<PointVertex> isolatedDeletionWorkingPoints_;
+  std::size_t isolatedVisiblePointCount_ = 0;
   std::size_t isolatedProcessCursor_ = 0;
   bool useImGuiMenuBar_ = false;
   RenderDetail activeRenderDetail_ = RenderDetail::kFull;
