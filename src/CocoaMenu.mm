@@ -3,6 +3,7 @@
 #import <AppKit/AppKit.h>
 
 static std::function<void()> gOnOpenRequested;
+static std::function<void()> gOnResetViewRequested;
 
 @interface PointmodMenuTarget : NSObject
 @end
@@ -15,14 +16,23 @@ static std::function<void()> gOnOpenRequested;
   }
 }
 
+- (void)resetView:(id)sender {
+  if (gOnResetViewRequested) {
+    gOnResetViewRequested();
+  }
+}
+
 @end
 
 namespace pointmod {
 
-void InstallNativeMenu(const std::function<void()>& onOpenRequested) {
+void InstallNativeMenu(
+  const std::function<void()>& onOpenRequested,
+  const std::function<void()>& onResetViewRequested) {
   static PointmodMenuTarget* target = nil;
 
   gOnOpenRequested = onOpenRequested;
+  gOnResetViewRequested = onResetViewRequested;
 
   [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
 
@@ -49,6 +59,16 @@ void InstallNativeMenu(const std::function<void()>& onOpenRequested) {
   [openItem setTarget:target];
   [fileMenu addItem:openItem];
   [mainMenu setSubmenu:fileMenu forItem:fileMenuItem];
+
+  NSMenuItem* viewMenuItem = [[NSMenuItem alloc] init];
+  [mainMenu addItem:viewMenuItem];
+
+  NSMenu* viewMenu = [[NSMenu alloc] initWithTitle:@"View"];
+  NSMenuItem* resetViewItem = [[NSMenuItem alloc] initWithTitle:@"Reset View" action:@selector(resetView:) keyEquivalent:@"0"];
+  [resetViewItem setKeyEquivalentModifierMask:NSEventModifierFlagCommand];
+  [resetViewItem setTarget:target];
+  [viewMenu addItem:resetViewItem];
+  [mainMenu setSubmenu:viewMenu forItem:viewMenuItem];
 }
 
 }  // namespace pointmod

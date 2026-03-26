@@ -41,7 +41,7 @@ void OrbitCamera::Pan(float deltaX, float deltaY) {
 
 void OrbitCamera::Zoom(float amount) {
   const float zoomScale = 1.0f - amount * 0.1f;
-  distance_ = std::clamp(distance_ * zoomScale, orbitRadius_ * 0.05f, orbitRadius_ * 200.0f);
+  distance_ = std::clamp(distance_ * zoomScale, orbitRadius_ * 0.01f, orbitRadius_ * 200.0f);
 }
 
 Mat4 OrbitCamera::ViewProjection(float aspectRatio) const {

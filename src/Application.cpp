@@ -596,7 +596,9 @@ void Application::InitializeWindow() {
     app->OpenPointCloud(std::filesystem::path(paths[0]));
   });
 
-  InstallNativeMenu([this]() { StartOpenDialog(); });
+  InstallNativeMenu(
+    [this]() { StartOpenDialog(); },
+    [this]() { ResetView(); });
 }
 
 void Application::InitializeImGui() {
@@ -1675,6 +1677,17 @@ void Application::StartOpenDialog() {
   if (std::optional<std::filesystem::path> selectedPath = OpenPointCloudDialog()) {
     OpenPointCloud(*selectedPath);
   }
+}
+
+void Application::ResetView() {
+  if (!currentCloud_.bounds.IsValid()) {
+    return;
+  }
+
+  camera_.Frame(currentCloud_.bounds);
+  cameraFramed_ = true;
+  cameraTouched_ = false;
+  statusMessage_ = "View reset.";
 }
 
 void Application::OpenPointCloud(const std::filesystem::path& path) {

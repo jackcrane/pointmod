@@ -2,7 +2,7 @@
 
 namespace pointmod {
 
-void InstallNativeMenu(const std::function<void()>&) {
+void InstallNativeMenu(const std::function<void()>&, const std::function<void()>&) {
 }
 
 }  // namespace pointmod

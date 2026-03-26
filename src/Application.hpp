@@ -77,6 +77,7 @@ class Application {
   void UpdateInteractionPointBudget();
   void HandleCameraInput();
   void StartOpenDialog();
+  void ResetView();
   void OpenPointCloud(const std::filesystem::path& path);
   void AddHideBox();
   void ClearHideBoxes();
