@@ -315,7 +315,7 @@ void Application::RenderUi() {
     }
 
     ImGui::SliderFloat("Point size", &pointSize_, 1.0f, 8.0f, "%.1f px");
-    ImGui::TextUnformatted("Controls: left drag orbit, right drag pan, wheel zoom.");
+    ImGui::TextUnformatted("Controls: right drag orbit, middle drag or Shift+right drag pan, wheel zoom.");
 
     if (hasHideBoxes) {
       ImGui::Separator();
@@ -492,6 +492,9 @@ void Application::HandleCameraInput() {
   const bool controlPressed =
     glfwGetKey(window_, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS ||
     glfwGetKey(window_, GLFW_KEY_RIGHT_CONTROL) == GLFW_PRESS;
+  const bool shiftPressed =
+    glfwGetKey(window_, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS ||
+    glfwGetKey(window_, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS;
   const bool openShortcutPressed =
 #if defined(__APPLE__)
     commandPressed && glfwGetKey(window_, GLFW_KEY_O) == GLFW_PRESS;
@@ -506,12 +509,16 @@ void Application::HandleCameraInput() {
   interactionActive_ = false;
 
   if (!io.WantCaptureMouse && currentCloud_.bounds.IsValid()) {
-    if (glfwGetMouseButton(window_, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS) {
+    const bool middlePressed = glfwGetMouseButton(window_, GLFW_MOUSE_BUTTON_MIDDLE) == GLFW_PRESS;
+    const bool rightPressed = glfwGetMouseButton(window_, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
+    const bool panActive = middlePressed || (shiftPressed && rightPressed);
+
+    if (rightPressed && !shiftPressed) {
       camera_.Rotate(deltaX, deltaY);
       cameraTouched_ = true;
       interactionActive_ = true;
     }
-    if (glfwGetMouseButton(window_, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS) {
+    if (panActive) {
       camera_.Pan(deltaX, deltaY);
       cameraTouched_ = true;
       interactionActive_ = true;
