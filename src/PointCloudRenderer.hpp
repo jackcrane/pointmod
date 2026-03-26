@@ -44,7 +44,10 @@ class PointCloudRenderer {
     float interactionPointFraction,
     const std::vector<HideBox>& displayHideBoxes,
     bool drawHideBoxes,
-    int selectedHideBox) const;
+    int selectedHideBox,
+    const std::vector<SelectionSphere>& selectionSpheres,
+    bool drawHoveredPoint,
+    const Vec3& hoveredPoint) const;
 
   [[nodiscard]] bool HasCloud() const;
   [[nodiscard]] std::size_t PointCount() const;
@@ -64,6 +67,12 @@ class PointCloudRenderer {
     const Mat4& viewProjection,
     const std::vector<HideBox>& hideBoxes,
     int selectedHideBox) const;
+  void RenderSelectionOverlay(
+    const Mat4& viewProjection,
+    float pointSize,
+    const std::vector<SelectionSphere>& selectionSpheres,
+    bool drawHoveredPoint,
+    const Vec3& hoveredPoint) const;
   bool initialized_ = false;
   unsigned int program_ = 0;
   int viewProjectionLocation_ = -1;

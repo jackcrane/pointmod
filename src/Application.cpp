@@ -25,6 +25,11 @@ constexpr float kGizmoHitRadiusPixels = 12.0f;
 constexpr float kGizmoArrowHeadPixels = 12.0f;
 constexpr float kGizmoRotateRadiusFactor = 0.85f;
 constexpr int kGizmoCircleSegments = 48;
+constexpr float kPointPickRadiusPixels = 10.0f;
+constexpr float kPointScaleHandleRadiusPixels = 10.0f;
+constexpr float kPointSelectionDefaultRadius = 2.0f;
+constexpr float kPointSelectionMinRadius = 0.05f;
+constexpr std::size_t kHoverPickTargetPoints = 150'000;
 constexpr float kRadiansToDegrees = 57.2957795131f;
 constexpr float kRotationDragPlaneEpsilon = 0.0001f;
 constexpr float kInteractionTargetFpsMin = 45.0f;
@@ -39,6 +44,17 @@ struct CameraRay {
   Vec3 origin = {0.0f, 0.0f, 0.0f};
   Vec3 direction = {0.0f, 0.0f, -1.0f};
 };
+
+struct PointPickResult {
+  bool hit = false;
+  std::size_t pointIndex = 0;
+  float screenDistanceSquared = FLT_MAX;
+  float cameraDistance = FLT_MAX;
+};
+
+Vec3 PointPosition(const PointVertex& point) {
+  return {point.x, point.y, point.z};
+}
 
 float GetAxisComponent(const Vec3& value, int axisIndex) {
   switch (axisIndex) {
@@ -101,6 +117,10 @@ ImVec2 Multiply(const ImVec2& value, float scalar) {
 
 float LengthSquared(const ImVec2& value) {
   return value.x * value.x + value.y * value.y;
+}
+
+float DistanceSquared(const ImVec2& a, const ImVec2& b) {
+  return LengthSquared(Subtract(a, b));
 }
 
 ImVec2 Normalize2D(const ImVec2& value) {
@@ -173,6 +193,16 @@ CameraRay BuildCameraRay(
   };
 }
 
+void BuildCameraBasis(const OrbitCamera& camera, Vec3& forward, Vec3& right, Vec3& up) {
+  const Vec3 eye = camera.Position();
+  forward = Normalize(camera.Target() - eye);
+  right = Normalize(Cross(forward, kWorldUp));
+  if (Length(right) <= 0.0f) {
+    right = {1.0f, 0.0f, 0.0f};
+  }
+  up = Normalize(Cross(right, forward));
+}
+
 bool IntersectRayPlane(const CameraRay& ray, const Vec3& planeOrigin, const Vec3& planeNormal, Vec3& hitPoint) {
   const float denominator = Dot(ray.direction, planeNormal);
   if (std::abs(denominator) <= 0.00001f) {
@@ -217,6 +247,88 @@ Vec3 ClampHalfSize(const Vec3& halfSize) {
     (std::max)(halfSize.y, kGizmoMinHalfSize),
     (std::max)(halfSize.z, kGizmoMinHalfSize),
   };
+}
+
+bool IsPointHidden(const Vec3& point, const std::vector<HideBox>& hideBoxes) {
+  for (const HideBox& hideBox : hideBoxes) {
+    if (Contains(hideBox, point)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+std::size_t HoverPickStep(std::size_t pointCount) {
+  if (pointCount <= kHoverPickTargetPoints) {
+    return 1;
+  }
+
+  const std::size_t step = (pointCount + kHoverPickTargetPoints - 1) / kHoverPickTargetPoints;
+  return (std::max)(std::size_t{1}, step);
+}
+
+Vec3 BuildScaleHandleDirection(const OrbitCamera& camera) {
+  Vec3 forward;
+  Vec3 right;
+  Vec3 up;
+  BuildCameraBasis(camera, forward, right, up);
+
+  Vec3 direction = Normalize(right + up);
+  if (Length(direction) <= 0.0f) {
+    direction = right;
+  }
+  if (Length(direction) <= 0.0f) {
+    direction = {1.0f, 0.0f, 0.0f};
+  }
+  return direction;
+}
+
+PointPickResult PickPoint(
+  const std::vector<PointVertex>& points,
+  const OrbitCamera& camera,
+  const Mat4& viewProjection,
+  const ImVec2& viewportOrigin,
+  const ImVec2& viewportSize,
+  const ImVec2& mousePosition,
+  float hitRadiusPixels,
+  const std::vector<HideBox>& hideBoxes,
+  std::size_t pointStep) {
+  PointPickResult bestPick;
+  if (points.empty() || pointStep == 0) {
+    return bestPick;
+  }
+
+  const float maxDistanceSquared = hitRadiusPixels * hitRadiusPixels;
+  const Vec3 eye = camera.Position();
+  for (std::size_t pointIndex = 0; pointIndex < points.size(); pointIndex += pointStep) {
+    const Vec3 position = PointPosition(points[pointIndex]);
+    if (IsPointHidden(position, hideBoxes)) {
+      continue;
+    }
+
+    ImVec2 screenPoint;
+    if (!ProjectToScreen(position, viewProjection, viewportOrigin, viewportSize, screenPoint)) {
+      continue;
+    }
+
+    const float screenDistanceSquared = DistanceSquared(mousePosition, screenPoint);
+    if (screenDistanceSquared > maxDistanceSquared) {
+      continue;
+    }
+
+    const float cameraDistance = Length(position - eye);
+    if (
+      !bestPick.hit ||
+      screenDistanceSquared < bestPick.screenDistanceSquared - 0.25f ||
+      (std::abs(screenDistanceSquared - bestPick.screenDistanceSquared) <= 0.25f && cameraDistance < bestPick.cameraDistance)) {
+      bestPick.hit = true;
+      bestPick.pointIndex = pointIndex;
+      bestPick.screenDistanceSquared = screenDistanceSquared;
+      bestPick.cameraDistance = cameraDistance;
+    }
+  }
+
+  return bestPick;
 }
 
 template <std::size_t SampleCount>
@@ -410,6 +522,7 @@ int Application::Run() {
       BeginImGuiFrame();
       RenderUi();
       UpdateHideBoxGizmo();
+      UpdatePointSelectionInteraction();
       HandleCameraInput();
       UpdateFrameStats();
       RenderScene();
@@ -565,6 +678,17 @@ void Application::RenderUi() {
     if (!hasHideBoxes) {
       ImGui::EndDisabled();
     }
+    ImGui::SameLine();
+    const bool hasPointSelections = !pointSelections_.empty();
+    if (!hasPointSelections) {
+      ImGui::BeginDisabled();
+    }
+    if (ImGui::Button("Clear point spheres")) {
+      ClearPointSelections();
+    }
+    if (!hasPointSelections) {
+      ImGui::EndDisabled();
+    }
 
     ImGui::TextWrapped("%s", statusMessage_.c_str());
     ImGui::Separator();
@@ -584,6 +708,10 @@ void Application::RenderUi() {
         ImGui::Text("Sampling stride: 1 / %llu", static_cast<unsigned long long>(currentCloud_.samplingStride));
       }
       ImGui::Text("Hide boxes: %llu", static_cast<unsigned long long>(hideBoxes_.size()));
+      ImGui::Text("Point spheres: %llu", static_cast<unsigned long long>(pointSelections_.size()));
+      if (activePointSelection_ >= 0 && activePointSelection_ < static_cast<int>(pointSelections_.size())) {
+        ImGui::Text("Active sphere radius: %.3f", pointSelections_[static_cast<std::size_t>(activePointSelection_)].radius);
+      }
       ImGui::Text("FPS: %.1f (%.2f ms)", smoothedFps_, smoothedFrameMs_);
       ImGui::Text(
         "Display detail: %s (%llu pts)",
@@ -628,7 +756,7 @@ void Application::RenderUi() {
         depthCurveDragValue_);
       ImGui::TextWrapped("Drag across the graph to remap brightness from near to far camera distance.");
     }
-    ImGui::TextUnformatted("Controls: right drag orbit, middle drag or Shift+right drag pan, wheel zoom.");
+    ImGui::TextWrapped("Controls: left click a point to add a red sphere, drag its red square grip to resize, right drag orbit, middle drag or Shift+right drag pan, wheel zoom.");
 
     if (hasHideBoxes) {
       ImGui::Separator();
@@ -1011,6 +1139,222 @@ void Application::UpdateHideBoxGizmo() {
   }
 }
 
+void Application::UpdatePointSelectionInteraction() {
+  hoveredPointActive_ = false;
+  pointScaleHandleHovered_ = false;
+  pointScaleHandleHotSelection_ = -1;
+
+  ImGuiIO& io = ImGui::GetIO();
+  const ImGuiViewport* viewport = ImGui::GetMainViewport();
+  if (viewport == nullptr) {
+    pointScaleDrag_ = {};
+    return;
+  }
+
+  const ImVec2 viewportOrigin = viewport->Pos;
+  const ImVec2 viewportSize = viewport->Size;
+  const ImVec2 mousePosition = io.MousePos;
+  const bool mouseInViewport =
+    mousePosition.x >= viewportOrigin.x &&
+    mousePosition.y >= viewportOrigin.y &&
+    mousePosition.x <= viewportOrigin.x + viewportSize.x &&
+    mousePosition.y <= viewportOrigin.y + viewportSize.y;
+
+  if (
+    viewportSize.x <= 0.0f ||
+    viewportSize.y <= 0.0f ||
+    currentCloud_.points.empty()) {
+    pointScaleDrag_ = {};
+    return;
+  }
+
+  auto pointPositionAt = [&](std::size_t pointIndex) {
+    return PointPosition(currentCloud_.points[pointIndex]);
+  };
+
+  auto drawScaleHandles = [&]() {
+    const Mat4 viewProjection = camera_.ViewProjection(viewportSize.x / viewportSize.y);
+    const Vec3 handleDirection = BuildScaleHandleDirection(camera_);
+    ImDrawList* drawList = ImGui::GetBackgroundDrawList();
+    for (std::size_t selectionIndex = 0; selectionIndex < pointSelections_.size(); ++selectionIndex) {
+      const PointSelection& selection = pointSelections_[selectionIndex];
+      if (selection.pointIndex >= currentCloud_.points.size()) {
+        continue;
+      }
+
+      const Vec3 center = pointPositionAt(selection.pointIndex);
+      if (IsPointHidden(center, committedHideBoxes_)) {
+        continue;
+      }
+
+      ImVec2 centerScreen;
+      ImVec2 handleScreen;
+      if (
+        !ProjectToScreen(center, viewProjection, viewportOrigin, viewportSize, centerScreen) ||
+        !ProjectToScreen(center + handleDirection * selection.radius, viewProjection, viewportOrigin, viewportSize, handleScreen)) {
+        continue;
+      }
+
+      const bool active = static_cast<int>(selectionIndex) == activePointSelection_;
+      const bool hot = static_cast<int>(selectionIndex) == pointScaleHandleHotSelection_ || (pointScaleDrag_.active && pointScaleDrag_.selectionIndex == static_cast<int>(selectionIndex));
+      const ImU32 lineColor = hot || active ? IM_COL32(255, 96, 96, 255) : IM_COL32(214, 48, 49, 220);
+      const ImU32 handleColor = hot || active ? IM_COL32(255, 128, 128, 255) : IM_COL32(224, 64, 64, 235);
+      const float thickness = hot || active ? 2.5f : 1.8f;
+      const float handleRadius = hot || active ? 6.0f : 5.0f;
+      drawList->AddLine(centerScreen, handleScreen, lineColor, thickness);
+      drawList->AddRectFilled(
+        {handleScreen.x - handleRadius, handleScreen.y - handleRadius},
+        {handleScreen.x + handleRadius, handleScreen.y + handleRadius},
+        handleColor,
+        1.5f);
+    }
+  };
+
+  if (pointScaleDrag_.active) {
+    if (
+      pointScaleDrag_.selectionIndex < 0 ||
+      pointScaleDrag_.selectionIndex >= static_cast<int>(pointSelections_.size())) {
+      pointScaleDrag_ = {};
+      return;
+    }
+
+    pointScaleHandleHovered_ = true;
+    pointScaleHandleHotSelection_ = pointScaleDrag_.selectionIndex;
+    activePointSelection_ = pointScaleDrag_.selectionIndex;
+
+    if (!ImGui::IsMouseDown(0)) {
+      pointScaleDrag_ = {};
+      return;
+    }
+
+    PointSelection& selection = pointSelections_[static_cast<std::size_t>(pointScaleDrag_.selectionIndex)];
+    const Vec3 center = pointPositionAt(selection.pointIndex);
+    const CameraRay ray = BuildCameraRay(
+      camera_,
+      mousePosition.x - viewportOrigin.x,
+      mousePosition.y - viewportOrigin.y,
+      viewportSize.x,
+      viewportSize.y);
+    Vec3 hitPoint;
+    if (IntersectRayPlane(ray, center, pointScaleDrag_.planeNormal, hitPoint)) {
+      selection.radius = (std::max)(kPointSelectionMinRadius, Length(hitPoint - center));
+    }
+    drawScaleHandles();
+    return;
+  }
+
+  if (!mouseInViewport || io.WantCaptureMouse || hideBoxGizmoDrag_.active || hideBoxGizmoHovered_) {
+    drawScaleHandles();
+    return;
+  }
+
+  if (ImGui::IsMouseDown(1) || ImGui::IsMouseDown(2)) {
+    drawScaleHandles();
+    return;
+  }
+
+  const Mat4 viewProjection = camera_.ViewProjection(viewportSize.x / viewportSize.y);
+  const Vec3 handleDirection = BuildScaleHandleDirection(camera_);
+  float bestHandleDistanceSquared = kPointScaleHandleRadiusPixels * kPointScaleHandleRadiusPixels;
+
+  for (std::size_t selectionIndex = 0; selectionIndex < pointSelections_.size(); ++selectionIndex) {
+    const PointSelection& selection = pointSelections_[selectionIndex];
+    if (selection.pointIndex >= currentCloud_.points.size()) {
+      continue;
+    }
+
+    const Vec3 center = pointPositionAt(selection.pointIndex);
+    if (IsPointHidden(center, committedHideBoxes_)) {
+      continue;
+    }
+
+    ImVec2 handleScreen;
+    if (!ProjectToScreen(center + handleDirection * selection.radius, viewProjection, viewportOrigin, viewportSize, handleScreen)) {
+      continue;
+    }
+
+    const float distanceSquared = DistanceSquared(mousePosition, handleScreen);
+    if (distanceSquared < bestHandleDistanceSquared) {
+      bestHandleDistanceSquared = distanceSquared;
+      pointScaleHandleHovered_ = true;
+      pointScaleHandleHotSelection_ = static_cast<int>(selectionIndex);
+    }
+  }
+
+  if (pointScaleHandleHovered_ && ImGui::IsMouseClicked(0)) {
+    pointScaleDrag_.active = true;
+    pointScaleDrag_.selectionIndex = pointScaleHandleHotSelection_;
+    activePointSelection_ = pointScaleHandleHotSelection_;
+
+    const PointSelection& selection = pointSelections_[static_cast<std::size_t>(pointScaleHandleHotSelection_)];
+    const Vec3 center = pointPositionAt(selection.pointIndex);
+    Vec3 planeNormal = Normalize(camera_.Position() - center);
+    if (Length(planeNormal) <= 0.0f) {
+      planeNormal = Normalize(camera_.Target() - camera_.Position());
+    }
+    if (Length(planeNormal) <= 0.0f) {
+      planeNormal = {0.0f, 0.0f, 1.0f};
+    }
+    pointScaleDrag_.planeNormal = planeNormal;
+    drawScaleHandles();
+    return;
+  }
+
+  const std::size_t hoverPointStep = HoverPickStep(currentCloud_.points.size());
+  const PointPickResult hoverPick = PickPoint(
+    currentCloud_.points,
+    camera_,
+    viewProjection,
+    viewportOrigin,
+    viewportSize,
+    mousePosition,
+    kPointPickRadiusPixels,
+    committedHideBoxes_,
+    hoverPointStep);
+  if (hoverPick.hit) {
+    hoveredPointActive_ = true;
+    hoveredPointIndex_ = hoverPick.pointIndex;
+  }
+
+  if (!ImGui::IsMouseClicked(0)) {
+    drawScaleHandles();
+    return;
+  }
+
+  const PointPickResult clickPick = PickPoint(
+    currentCloud_.points,
+    camera_,
+    viewProjection,
+    viewportOrigin,
+    viewportSize,
+    mousePosition,
+    kPointPickRadiusPixels,
+    committedHideBoxes_,
+    1);
+  if (!clickPick.hit) {
+    drawScaleHandles();
+    return;
+  }
+
+  hoveredPointActive_ = true;
+  hoveredPointIndex_ = clickPick.pointIndex;
+
+  for (std::size_t selectionIndex = 0; selectionIndex < pointSelections_.size(); ++selectionIndex) {
+    if (pointSelections_[selectionIndex].pointIndex == clickPick.pointIndex) {
+      activePointSelection_ = static_cast<int>(selectionIndex);
+      drawScaleHandles();
+      return;
+    }
+  }
+
+  pointSelections_.push_back(PointSelection{
+    .pointIndex = clickPick.pointIndex,
+    .radius = kPointSelectionDefaultRadius,
+  });
+  activePointSelection_ = static_cast<int>(pointSelections_.size()) - 1;
+  drawScaleHandles();
+}
+
 void Application::RenderScene() {
   int framebufferWidth = 0;
   int framebufferHeight = 0;
@@ -1018,6 +1362,41 @@ void Application::RenderScene() {
 
   glClearColor(0.05f, 0.07f, 0.10f, 1.0f);
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+  std::vector<SelectionSphere> selectionSpheres;
+  selectionSpheres.reserve(pointSelections_.size());
+  for (const PointSelection& selection : pointSelections_) {
+    if (selection.pointIndex >= currentCloud_.points.size()) {
+      continue;
+    }
+
+    const Vec3 center = PointPosition(currentCloud_.points[selection.pointIndex]);
+    if (IsPointHidden(center, committedHideBoxes_)) {
+      continue;
+    }
+
+    selectionSpheres.push_back(SelectionSphere{
+      .center = center,
+      .radius = selection.radius,
+    });
+  }
+
+  bool drawHoveredPoint = hoveredPointActive_ && hoveredPointIndex_ < currentCloud_.points.size();
+  if (drawHoveredPoint) {
+    for (const PointSelection& selection : pointSelections_) {
+      if (selection.pointIndex == hoveredPointIndex_) {
+        drawHoveredPoint = false;
+        break;
+      }
+    }
+    if (drawHoveredPoint) {
+      const Vec3 hoveredPoint = PointPosition(currentCloud_.points[hoveredPointIndex_]);
+      drawHoveredPoint = !IsPointHidden(hoveredPoint, committedHideBoxes_);
+    }
+  }
+  const Vec3 hoveredPoint = drawHoveredPoint
+    ? PointPosition(currentCloud_.points[hoveredPointIndex_])
+    : Vec3{};
 
   renderer_.Render(
     camera_,
@@ -1030,7 +1409,10 @@ void Application::RenderScene() {
     interactionPointFraction_,
     hideBoxes_,
     hideBoxesVisible_,
-    selectedHideBox_);
+    selectedHideBox_,
+    selectionSpheres,
+    drawHoveredPoint,
+    hoveredPoint);
 }
 
 void Application::UpdateCloudLoading() {
@@ -1192,11 +1574,13 @@ void Application::HandleCameraInput() {
     StartOpenDialog();
   }
   openShortcutLatched_ = openShortcutPressed;
-  interactionActive_ = false;
+  interactionActive_ = hideBoxGizmoDrag_.active || pointScaleDrag_.active;
 
   const bool gizmoCapturingLeftMouse =
     hideBoxGizmoDrag_.active ||
-    (hideBoxGizmoHovered_ && glfwGetMouseButton(window_, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS);
+    (hideBoxGizmoHovered_ && glfwGetMouseButton(window_, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS) ||
+    pointScaleDrag_.active ||
+    (pointScaleHandleHovered_ && glfwGetMouseButton(window_, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS);
 
   if (!io.WantCaptureMouse && currentCloud_.bounds.IsValid()) {
     const bool middlePressed = glfwGetMouseButton(window_, GLFW_MOUSE_BUTTON_MIDDLE) == GLFW_PRESS;
@@ -1249,6 +1633,7 @@ void Application::OpenPointCloud(const std::filesystem::path& path) {
   hideBoxesVisible_ = true;
   selectedHideBox_ = -1;
   ResetHideBoxGizmo();
+  ClearPointSelections();
   currentCloud_.sourcePath = path;
   cameraFramed_ = false;
   cameraTouched_ = false;
@@ -1283,6 +1668,15 @@ void Application::ClearHideBoxes() {
   selectedHideBox_ = -1;
   ResetHideBoxGizmo();
   CommitHideBoxes();
+}
+
+void Application::ClearPointSelections() {
+  pointSelections_.clear();
+  activePointSelection_ = -1;
+  hoveredPointActive_ = false;
+  pointScaleHandleHovered_ = false;
+  pointScaleHandleHotSelection_ = -1;
+  pointScaleDrag_ = {};
 }
 
 void Application::CommitHideBoxes() {

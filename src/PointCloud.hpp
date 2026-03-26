@@ -29,6 +29,11 @@ struct HideBox {
   Vec3 halfSize = {0.5f, 0.5f, 0.5f};
 };
 
+struct SelectionSphere {
+  Vec3 center = {0.0f, 0.0f, 0.0f};
+  float radius = 2.0f;
+};
+
 struct Bounds {
   Vec3 min = {
     std::numeric_limits<float>::max(),

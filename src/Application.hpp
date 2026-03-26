@@ -5,6 +5,7 @@
 #include "PointCloudRenderer.hpp"
 
 #include <array>
+#include <cstddef>
 
 struct GLFWwindow;
 
@@ -41,6 +42,17 @@ class Application {
     Vec3 startPlaneVector = {1.0f, 0.0f, 0.0f};
   };
 
+  struct PointSelection {
+    std::size_t pointIndex = 0;
+    float radius = 2.0f;
+  };
+
+  struct PointScaleDragState {
+    bool active = false;
+    int selectionIndex = -1;
+    Vec3 planeNormal = {0.0f, 0.0f, 1.0f};
+  };
+
   void InitializeWindow();
   void InitializeImGui();
   void Shutdown();
@@ -49,6 +61,7 @@ class Application {
   void RenderUi();
   void RenderScene();
   void UpdateHideBoxGizmo();
+  void UpdatePointSelectionInteraction();
   void UpdateCloudLoading();
   void UpdateFrameStats();
   void UpdateInteractionPointBudget();
@@ -57,6 +70,7 @@ class Application {
   void OpenPointCloud(const std::filesystem::path& path);
   void AddHideBox();
   void ClearHideBoxes();
+  void ClearPointSelections();
   void CommitHideBoxes();
   void ResetHideBoxGizmo();
 
@@ -107,6 +121,13 @@ class Application {
   HideBoxGizmoAxis hideBoxGizmoHotAxis_ = HideBoxGizmoAxis::kNone;
   bool hideBoxGizmoHovered_ = false;
   HideBoxGizmoDragState hideBoxGizmoDrag_;
+  std::vector<PointSelection> pointSelections_;
+  int activePointSelection_ = -1;
+  bool hoveredPointActive_ = false;
+  std::size_t hoveredPointIndex_ = 0;
+  bool pointScaleHandleHovered_ = false;
+  int pointScaleHandleHotSelection_ = -1;
+  PointScaleDragState pointScaleDrag_;
   RenderDetail activeRenderDetail_ = RenderDetail::kFull;
   bool glfwInitialized_ = false;
   bool imguiInitialized_ = false;

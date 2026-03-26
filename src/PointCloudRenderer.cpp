@@ -16,6 +16,10 @@ namespace {
 constexpr std::size_t kUploadChunkPoints = 1'000'000;
 constexpr int kHideBoxTextureWidth = 3;
 constexpr float kDepthRangeEpsilon = 0.0001f;
+constexpr int kSphereSegments = 32;
+constexpr std::uint8_t kSelectionRed = 235;
+constexpr std::uint8_t kHoverGreen = 165;
+constexpr std::uint8_t kHoverBlue = 32;
 
 constexpr const char* kVertexShaderSource = R"(
 #version 150 core
@@ -177,6 +181,42 @@ std::size_t ScalePointCount(std::size_t pointCount, float fraction) {
 void AppendBoxEdge(std::vector<PointVertex>& vertices, const Vec3& a, const Vec3& b, std::uint8_t g, std::uint8_t bChannel) {
   vertices.push_back(PointVertex{a.x, a.y, a.z, 70, g, bChannel, 255});
   vertices.push_back(PointVertex{b.x, b.y, b.z, 70, g, bChannel, 255});
+}
+
+void AppendLine(
+  std::vector<PointVertex>& vertices,
+  const Vec3& a,
+  const Vec3& b,
+  std::uint8_t r,
+  std::uint8_t g,
+  std::uint8_t bChannel) {
+  vertices.push_back(PointVertex{a.x, a.y, a.z, r, g, bChannel, 255});
+  vertices.push_back(PointVertex{b.x, b.y, b.z, r, g, bChannel, 255});
+}
+
+void AppendCircle(
+  std::vector<PointVertex>& vertices,
+  const Vec3& center,
+  float radius,
+  const Vec3& axisA,
+  const Vec3& axisB,
+  std::uint8_t r,
+  std::uint8_t g,
+  std::uint8_t bChannel) {
+  for (int segmentIndex = 0; segmentIndex < kSphereSegments; ++segmentIndex) {
+    const float angleA = static_cast<float>(segmentIndex) / static_cast<float>(kSphereSegments) * 6.28318530718f;
+    const float angleB = static_cast<float>(segmentIndex + 1) / static_cast<float>(kSphereSegments) * 6.28318530718f;
+    const Vec3 pointA = center + axisA * (std::cos(angleA) * radius) + axisB * (std::sin(angleA) * radius);
+    const Vec3 pointB = center + axisA * (std::cos(angleB) * radius) + axisB * (std::sin(angleB) * radius);
+    AppendLine(vertices, pointA, pointB, r, g, bChannel);
+  }
+}
+
+void AppendSelectionSphere(std::vector<PointVertex>& vertices, const SelectionSphere& sphere) {
+  const float radius = (std::max)(sphere.radius, 0.001f);
+  AppendCircle(vertices, sphere.center, radius, {1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, kSelectionRed, 70, 70);
+  AppendCircle(vertices, sphere.center, radius, {1.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 1.0f}, kSelectionRed, 70, 70);
+  AppendCircle(vertices, sphere.center, radius, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f, 1.0f}, kSelectionRed, 70, 70);
 }
 
 float DistanceToBounds(const Bounds& bounds, const Vec3& point) {
@@ -423,12 +463,19 @@ void PointCloudRenderer::Render(
   float interactionPointFraction,
   const std::vector<HideBox>& displayHideBoxes,
   bool drawHideBoxes,
-  int selectedHideBox) const {
+  int selectedHideBox,
+  const std::vector<SelectionSphere>& selectionSpheres,
+  bool drawHoveredPoint,
+  const Vec3& hoveredPoint) const {
   if (!initialized_ || viewportWidth <= 0 || viewportHeight <= 0) {
     return;
   }
 
-  if (pointCount_ == 0 && (!drawHideBoxes || displayHideBoxes.empty())) {
+  if (
+    pointCount_ == 0 &&
+    (!drawHideBoxes || displayHideBoxes.empty()) &&
+    selectionSpheres.empty() &&
+    !drawHoveredPoint) {
     return;
   }
 
@@ -467,6 +514,9 @@ void PointCloudRenderer::Render(
 
   if (drawHideBoxes && !displayHideBoxes.empty()) {
     RenderHideBoxes(viewProjection, displayHideBoxes, selectedHideBox);
+  }
+  if (!selectionSpheres.empty() || drawHoveredPoint) {
+    RenderSelectionOverlay(viewProjection, pointSize, selectionSpheres, drawHoveredPoint, hoveredPoint);
   }
 
   glBindTexture(GL_TEXTURE_2D, 0);
@@ -532,6 +582,73 @@ void PointCloudRenderer::RenderHideBoxes(
     lineVertices.data(),
     GL_DYNAMIC_DRAW);
   glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(lineVertices.size()));
+  glBindBuffer(GL_ARRAY_BUFFER, 0);
+}
+
+void PointCloudRenderer::RenderSelectionOverlay(
+  const Mat4& viewProjection,
+  float pointSize,
+  const std::vector<SelectionSphere>& selectionSpheres,
+  bool drawHoveredPoint,
+  const Vec3& hoveredPoint) const {
+  std::vector<PointVertex> lineVertices;
+  lineVertices.reserve(selectionSpheres.size() * static_cast<std::size_t>(kSphereSegments * 3 * 2));
+  for (const SelectionSphere& sphere : selectionSpheres) {
+    AppendSelectionSphere(lineVertices, sphere);
+  }
+
+  glUniformMatrix4fv(viewProjectionLocation_, 1, GL_FALSE, viewProjection.m);
+  glUniform1i(colorModeLocation_, static_cast<int>(PointColorMode::kSource));
+  glUniform1i(hideBoxCountLocation_, 0);
+
+  if (!lineVertices.empty()) {
+    glUniform1f(pointSizeLocation_, 1.0f);
+    glBindVertexArray(overlayVao_);
+    glBindBuffer(GL_ARRAY_BUFFER, overlayVbo_);
+    glBufferData(
+      GL_ARRAY_BUFFER,
+      static_cast<GLsizeiptr>(lineVertices.size() * sizeof(PointVertex)),
+      lineVertices.data(),
+      GL_DYNAMIC_DRAW);
+    glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(lineVertices.size()));
+  }
+
+  std::vector<PointVertex> pointVertices;
+  pointVertices.reserve(selectionSpheres.size() + (drawHoveredPoint ? 1U : 0U));
+  for (const SelectionSphere& sphere : selectionSpheres) {
+    pointVertices.push_back(PointVertex{
+      sphere.center.x,
+      sphere.center.y,
+      sphere.center.z,
+      kSelectionRed,
+      70,
+      70,
+      255,
+    });
+  }
+  if (drawHoveredPoint) {
+    pointVertices.push_back(PointVertex{
+      hoveredPoint.x,
+      hoveredPoint.y,
+      hoveredPoint.z,
+      255,
+      kHoverGreen,
+      kHoverBlue,
+      255,
+    });
+  }
+
+  if (!pointVertices.empty()) {
+    glUniform1f(pointSizeLocation_, (std::max)(pointSize + 4.0f, 6.0f));
+    glBindVertexArray(overlayVao_);
+    glBindBuffer(GL_ARRAY_BUFFER, overlayVbo_);
+    glBufferData(
+      GL_ARRAY_BUFFER,
+      static_cast<GLsizeiptr>(pointVertices.size() * sizeof(PointVertex)),
+      pointVertices.data(),
+      GL_DYNAMIC_DRAW);
+    glDrawArrays(GL_POINTS, 0, static_cast<GLsizei>(pointVertices.size()));
+  }
   glBindBuffer(GL_ARRAY_BUFFER, 0);
 }
 
