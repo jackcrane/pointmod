@@ -219,6 +219,148 @@ Vec3 ClampHalfSize(const Vec3& halfSize) {
   };
 }
 
+template <std::size_t SampleCount>
+void ResetDepthCurve(std::array<float, SampleCount>& curve) {
+  for (std::size_t index = 0; index < curve.size(); ++index) {
+    const float depth = curve.size() > 1
+      ? static_cast<float>(index) / static_cast<float>(curve.size() - 1)
+      : 0.0f;
+    curve[index] = 1.0f - depth;
+  }
+}
+
+template <std::size_t SampleCount>
+void ApplyDepthCurveStroke(
+  std::array<float, SampleCount>& curve,
+  int fromSample,
+  float fromValue,
+  int toSample,
+  float toValue) {
+  if (curve.empty() || fromSample < 0 || toSample < 0) {
+    return;
+  }
+
+  fromSample = (std::clamp)(fromSample, 0, static_cast<int>(curve.size()) - 1);
+  toSample = (std::clamp)(toSample, 0, static_cast<int>(curve.size()) - 1);
+  fromValue = (std::clamp)(fromValue, 0.0f, 1.0f);
+  toValue = (std::clamp)(toValue, 0.0f, 1.0f);
+
+  if (fromSample == toSample) {
+    curve[static_cast<std::size_t>(toSample)] = toValue;
+    return;
+  }
+
+  int startSample = fromSample;
+  int endSample = toSample;
+  float startValue = fromValue;
+  float endValue = toValue;
+  if (startSample > endSample) {
+    std::swap(startSample, endSample);
+    std::swap(startValue, endValue);
+  }
+
+  for (int sample = startSample; sample <= endSample; ++sample) {
+    const float t = endSample > startSample
+      ? static_cast<float>(sample - startSample) / static_cast<float>(endSample - startSample)
+      : 0.0f;
+    curve[static_cast<std::size_t>(sample)] = startValue + (endValue - startValue) * t;
+  }
+}
+
+template <std::size_t SampleCount>
+bool DrawDepthCurveEditor(
+  const char* id,
+  std::array<float, SampleCount>& curve,
+  bool& dragActive,
+  int& dragSample,
+  float& dragValue) {
+  const float width = (std::max)(ImGui::GetContentRegionAvail().x, 160.0f);
+  const ImVec2 canvasSize = {width, 170.0f};
+  const ImVec2 canvasOrigin = ImGui::GetCursorScreenPos();
+  const ImVec2 canvasMax = {canvasOrigin.x + canvasSize.x, canvasOrigin.y + canvasSize.y};
+  const ImVec2 graphPadding = {12.0f, 12.0f};
+  const ImVec2 graphMin = Add(canvasOrigin, graphPadding);
+  const ImVec2 graphMax = Subtract(canvasMax, graphPadding);
+  const float graphWidth = (std::max)(graphMax.x - graphMin.x, 1.0f);
+  const float graphHeight = (std::max)(graphMax.y - graphMin.y, 1.0f);
+
+  ImGui::InvisibleButton(id, canvasSize, ImGuiButtonFlags_MouseButtonLeft);
+  const bool hovered = ImGui::IsItemHovered();
+  const bool active = ImGui::IsItemActive();
+  const ImGuiIO& io = ImGui::GetIO();
+
+  auto mouseToCurve = [&](const ImVec2& mouse, int& sample, float& value) {
+    const float normalizedX = (std::clamp)((mouse.x - graphMin.x) / graphWidth, 0.0f, 1.0f);
+    const float normalizedY = (std::clamp)((mouse.y - graphMin.y) / graphHeight, 0.0f, 1.0f);
+    sample = static_cast<int>(std::round(normalizedX * static_cast<float>(curve.size() - 1)));
+    value = 1.0f - normalizedY;
+  };
+
+  bool changed = false;
+  if (!ImGui::IsMouseDown(0)) {
+    dragActive = false;
+    dragSample = -1;
+  } else if ((hovered && ImGui::IsMouseClicked(0)) || (dragActive && active)) {
+    int sample = 0;
+    float value = 1.0f;
+    mouseToCurve(io.MousePos, sample, value);
+    if (!dragActive) {
+      dragActive = true;
+      dragSample = sample;
+      dragValue = value;
+    }
+    ApplyDepthCurveStroke(curve, dragSample, dragValue, sample, value);
+    dragSample = sample;
+    dragValue = value;
+    changed = true;
+  }
+
+  ImDrawList* drawList = ImGui::GetWindowDrawList();
+  drawList->AddRectFilled(canvasOrigin, canvasMax, IM_COL32(18, 21, 26, 230), 6.0f);
+  drawList->AddRect(canvasOrigin, canvasMax, hovered || active ? IM_COL32(155, 168, 186, 255) : IM_COL32(82, 91, 105, 255), 6.0f);
+
+  for (int gridIndex = 1; gridIndex < 4; ++gridIndex) {
+    const float x = graphMin.x + graphWidth * static_cast<float>(gridIndex) / 4.0f;
+    const float y = graphMin.y + graphHeight * static_cast<float>(gridIndex) / 4.0f;
+    drawList->AddLine({x, graphMin.y}, {x, graphMax.y}, IM_COL32(52, 60, 72, 255), 1.0f);
+    drawList->AddLine({graphMin.x, y}, {graphMax.x, y}, IM_COL32(52, 60, 72, 255), 1.0f);
+  }
+
+  std::array<ImVec2, SampleCount> points{};
+  for (std::size_t index = 0; index < curve.size(); ++index) {
+    const float depth = curve.size() > 1
+      ? static_cast<float>(index) / static_cast<float>(curve.size() - 1)
+      : 0.0f;
+    points[index] = {
+      graphMin.x + graphWidth * depth,
+      graphMin.y + graphHeight * (1.0f - (std::clamp)(curve[index], 0.0f, 1.0f)),
+    };
+  }
+
+  drawList->AddPolyline(points.data(), static_cast<int>(points.size()), IM_COL32(236, 239, 244, 255), 0, 2.5f);
+  for (const ImVec2& point : points) {
+    drawList->AddCircleFilled(point, 2.5f, IM_COL32(236, 239, 244, 255));
+  }
+
+  drawList->AddText({graphMin.x, canvasOrigin.y + 2.0f}, IM_COL32(140, 147, 160, 255), "Bright");
+  drawList->AddText({graphMin.x, canvasMax.y - 18.0f}, IM_COL32(140, 147, 160, 255), "Near");
+  const char* farLabel = "Far";
+  const ImVec2 farLabelSize = ImGui::CalcTextSize(farLabel);
+  drawList->AddText({graphMax.x - farLabelSize.x, canvasMax.y - 18.0f}, IM_COL32(140, 147, 160, 255), farLabel);
+
+  return changed;
+}
+
+const char* PointColorModeLabel(PointColorMode mode) {
+  switch (mode) {
+    case PointColorMode::kSource:
+      return "Source color";
+    case PointColorMode::kDepth:
+      return "Depth greyscale";
+  }
+  return "Unknown";
+}
+
 HideBox MakeDefaultHideBox(const Bounds& bounds, const OrbitCamera& camera) {
   const Vec3 extents = bounds.Extents();
   const float fallbackSize = (std::max)(bounds.Radius() * 0.2f, 0.1f);
@@ -464,6 +606,28 @@ void Application::RenderUi() {
     }
 
     ImGui::SliderFloat("Point size", &pointSize_, 1.0f, 8.0f, "%.1f px");
+    ImGui::Text("Coloring: %s", PointColorModeLabel(pointColorMode_));
+    if (ImGui::RadioButton("Source color", pointColorMode_ == PointColorMode::kSource)) {
+      pointColorMode_ = PointColorMode::kSource;
+    }
+    ImGui::SameLine();
+    if (ImGui::RadioButton("Depth greyscale", pointColorMode_ == PointColorMode::kDepth)) {
+      pointColorMode_ = PointColorMode::kDepth;
+    }
+    if (pointColorMode_ == PointColorMode::kDepth) {
+      if (ImGui::Button("Reset depth curve")) {
+        ResetDepthCurve(depthColorCurve_);
+        depthCurveDragActive_ = false;
+        depthCurveDragSample_ = -1;
+      }
+      DrawDepthCurveEditor(
+        "##depth-curve",
+        depthColorCurve_,
+        depthCurveDragActive_,
+        depthCurveDragSample_,
+        depthCurveDragValue_);
+      ImGui::TextWrapped("Drag across the graph to remap brightness from near to far camera distance.");
+    }
     ImGui::TextUnformatted("Controls: right drag orbit, middle drag or Shift+right drag pan, wheel zoom.");
 
     if (hasHideBoxes) {
@@ -860,6 +1024,8 @@ void Application::RenderScene() {
     framebufferWidth,
     framebufferHeight,
     pointSize_,
+    pointColorMode_,
+    depthColorCurve_,
     activeRenderDetail_,
     interactionPointFraction_,
     hideBoxes_,

@@ -4,6 +4,8 @@
 #include "OrbitCamera.hpp"
 #include "PointCloudRenderer.hpp"
 
+#include <array>
+
 struct GLFWwindow;
 
 namespace pointmod {
@@ -87,6 +89,20 @@ class Application {
   std::vector<HideBox> committedHideBoxes_;
   bool hideBoxesVisible_ = true;
   int selectedHideBox_ = -1;
+  PointColorMode pointColorMode_ = PointColorMode::kSource;
+  std::array<float, kDepthColorCurveSampleCount> depthColorCurve_ = [] {
+    std::array<float, kDepthColorCurveSampleCount> curve{};
+    for (std::size_t index = 0; index < curve.size(); ++index) {
+      const float depth = curve.size() > 1
+        ? static_cast<float>(index) / static_cast<float>(curve.size() - 1)
+        : 0.0f;
+      curve[index] = 1.0f - depth;
+    }
+    return curve;
+  }();
+  bool depthCurveDragActive_ = false;
+  int depthCurveDragSample_ = -1;
+  float depthCurveDragValue_ = 1.0f;
   HideBoxGizmoMode hideBoxGizmoMode_ = HideBoxGizmoMode::kMove;
   HideBoxGizmoAxis hideBoxGizmoHotAxis_ = HideBoxGizmoAxis::kNone;
   bool hideBoxGizmoHovered_ = false;

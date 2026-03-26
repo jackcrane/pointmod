@@ -3,6 +3,7 @@
 #include "OpenGL.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <limits>
 #include <stdexcept>
@@ -14,6 +15,7 @@ namespace {
 
 constexpr std::size_t kUploadChunkPoints = 1'000'000;
 constexpr int kHideBoxTextureWidth = 3;
+constexpr float kDepthRangeEpsilon = 0.0001f;
 
 constexpr const char* kVertexShaderSource = R"(
 #version 150 core
@@ -22,11 +24,19 @@ in vec4 aColor;
 
 uniform mat4 uViewProjection;
 uniform float uPointSize;
+uniform int uColorMode;
+uniform vec3 uCameraPosition;
+uniform vec2 uDepthRange;
+uniform float uDepthCurve[32];
 uniform int uHideBoxCount;
 uniform sampler2D uHideBoxTexture;
 
 out vec4 vColor;
 flat out int vHidden;
+
+const int kPointColorModeSource = 0;
+const int kPointColorModeDepth = 1;
+const int kDepthCurveSampleCount = 32;
 
 vec4 QuaternionConjugate(vec4 q) {
   return vec4(-q.xyz, q.w);
@@ -37,11 +47,30 @@ vec3 RotateByQuaternion(vec3 value, vec4 q) {
   return value + q.w * t + cross(q.xyz, t);
 }
 
+float SampleDepthCurve(float depth) {
+  float scaled = clamp(depth, 0.0, 1.0) * float(kDepthCurveSampleCount - 1);
+  int leftIndex = int(floor(scaled));
+  int rightIndex = min(leftIndex + 1, kDepthCurveSampleCount - 1);
+  float fraction = scaled - float(leftIndex);
+  return mix(uDepthCurve[leftIndex], uDepthCurve[rightIndex], fraction);
+}
+
 void main() {
   gl_Position = uViewProjection * vec4(aPosition, 1.0);
   gl_PointSize = uPointSize;
-  vColor = aColor;
   vHidden = 0;
+
+  if (uColorMode == kPointColorModeDepth) {
+    float distanceFromCamera = distance(aPosition, uCameraPosition);
+    float normalizedDepth = clamp(
+      (distanceFromCamera - uDepthRange.x) / max(uDepthRange.y - uDepthRange.x, 0.0001),
+      0.0,
+      1.0);
+    float intensity = SampleDepthCurve(normalizedDepth);
+    vColor = vec4(vec3(intensity), aColor.a);
+  } else {
+    vColor = aColor;
+  }
 
   for (int hideBoxIndex = 0; hideBoxIndex < uHideBoxCount; ++hideBoxIndex) {
     vec4 packed0 = texelFetch(uHideBoxTexture, ivec2(0, hideBoxIndex), 0);
@@ -150,6 +179,42 @@ void AppendBoxEdge(std::vector<PointVertex>& vertices, const Vec3& a, const Vec3
   vertices.push_back(PointVertex{b.x, b.y, b.z, 70, g, bChannel, 255});
 }
 
+float DistanceToBounds(const Bounds& bounds, const Vec3& point) {
+  const float dx = (std::max)((std::max)(bounds.min.x - point.x, 0.0f), point.x - bounds.max.x);
+  const float dy = (std::max)((std::max)(bounds.min.y - point.y, 0.0f), point.y - bounds.max.y);
+  const float dz = (std::max)((std::max)(bounds.min.z - point.z, 0.0f), point.z - bounds.max.z);
+  return std::sqrt(dx * dx + dy * dy + dz * dz);
+}
+
+std::array<float, 2> ComputeDepthRange(const Bounds& bounds, const OrbitCamera& camera) {
+  if (!bounds.IsValid()) {
+    return {0.0f, 1.0f};
+  }
+
+  const Vec3 eye = camera.Position();
+  const float minimumDistance = DistanceToBounds(bounds, eye);
+  const Vec3 corners[8] = {
+    {bounds.min.x, bounds.min.y, bounds.min.z},
+    {bounds.max.x, bounds.min.y, bounds.min.z},
+    {bounds.min.x, bounds.max.y, bounds.min.z},
+    {bounds.max.x, bounds.max.y, bounds.min.z},
+    {bounds.min.x, bounds.min.y, bounds.max.z},
+    {bounds.max.x, bounds.min.y, bounds.max.z},
+    {bounds.min.x, bounds.max.y, bounds.max.z},
+    {bounds.max.x, bounds.max.y, bounds.max.z},
+  };
+
+  float maximumDistance = minimumDistance;
+  for (const Vec3& corner : corners) {
+    maximumDistance = (std::max)(maximumDistance, Length(corner - eye));
+  }
+
+  if (maximumDistance - minimumDistance < kDepthRangeEpsilon) {
+    return {minimumDistance, minimumDistance + 1.0f};
+  }
+  return {minimumDistance, maximumDistance};
+}
+
 }  // namespace
 
 PointCloudRenderer::~PointCloudRenderer() {
@@ -170,6 +235,10 @@ void PointCloudRenderer::Shutdown() {
 
   viewProjectionLocation_ = -1;
   pointSizeLocation_ = -1;
+  colorModeLocation_ = -1;
+  cameraPositionLocation_ = -1;
+  depthRangeLocation_ = -1;
+  depthCurveLocation_ = -1;
   hideBoxCountLocation_ = -1;
   hideBoxTextureLocation_ = -1;
   hideBoxCount_ = 0;
@@ -219,6 +288,10 @@ void PointCloudRenderer::Initialize() {
 
   viewProjectionLocation_ = glGetUniformLocation(program_, "uViewProjection");
   pointSizeLocation_ = glGetUniformLocation(program_, "uPointSize");
+  colorModeLocation_ = glGetUniformLocation(program_, "uColorMode");
+  cameraPositionLocation_ = glGetUniformLocation(program_, "uCameraPosition");
+  depthRangeLocation_ = glGetUniformLocation(program_, "uDepthRange");
+  depthCurveLocation_ = glGetUniformLocation(program_, "uDepthCurve[0]");
   hideBoxCountLocation_ = glGetUniformLocation(program_, "uHideBoxCount");
   hideBoxTextureLocation_ = glGetUniformLocation(program_, "uHideBoxTexture");
 
@@ -344,6 +417,8 @@ void PointCloudRenderer::Render(
   int viewportWidth,
   int viewportHeight,
   float pointSize,
+  PointColorMode colorMode,
+  const std::array<float, kDepthColorCurveSampleCount>& depthCurve,
   RenderDetail detail,
   float interactionPointFraction,
   const std::vector<HideBox>& displayHideBoxes,
@@ -363,8 +438,14 @@ void PointCloudRenderer::Render(
 
   glUseProgram(program_);
   const Mat4 viewProjection = camera.ViewProjection(static_cast<float>(viewportWidth) / static_cast<float>(viewportHeight));
+  const Vec3 eye = camera.Position();
+  const std::array<float, 2> depthRange = ComputeDepthRange(bounds_, camera);
   glUniformMatrix4fv(viewProjectionLocation_, 1, GL_FALSE, viewProjection.m);
   glUniform1f(pointSizeLocation_, pointSize);
+  glUniform1i(colorModeLocation_, static_cast<int>(colorMode));
+  glUniform3f(cameraPositionLocation_, eye.x, eye.y, eye.z);
+  glUniform2f(depthRangeLocation_, depthRange[0], depthRange[1]);
+  glUniform1fv(depthCurveLocation_, static_cast<GLsizei>(depthCurve.size()), depthCurve.data());
   glUniform1i(hideBoxCountLocation_, hideBoxCount_);
   glActiveTexture(GL_TEXTURE0);
   glBindTexture(GL_TEXTURE_2D, hideBoxTexture_);
@@ -442,6 +523,7 @@ void PointCloudRenderer::RenderHideBoxes(
 
   glUniformMatrix4fv(viewProjectionLocation_, 1, GL_FALSE, viewProjection.m);
   glUniform1f(pointSizeLocation_, 1.0f);
+  glUniform1i(colorModeLocation_, static_cast<int>(PointColorMode::kSource));
   glBindVertexArray(overlayVao_);
   glBindBuffer(GL_ARRAY_BUFFER, overlayVbo_);
   glBufferData(

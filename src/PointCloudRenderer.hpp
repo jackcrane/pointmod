@@ -3,6 +3,7 @@
 #include "OrbitCamera.hpp"
 #include "PointCloud.hpp"
 
+#include <array>
 #include <cstddef>
 #include <string>
 #include <vector>
@@ -14,6 +15,13 @@ enum class RenderDetail {
   kBalanced,
   kInteraction,
 };
+
+enum class PointColorMode {
+  kSource = 0,
+  kDepth = 1,
+};
+
+constexpr std::size_t kDepthColorCurveSampleCount = 32;
 
 class PointCloudRenderer {
  public:
@@ -30,6 +38,8 @@ class PointCloudRenderer {
     int viewportWidth,
     int viewportHeight,
     float pointSize,
+    PointColorMode colorMode,
+    const std::array<float, kDepthColorCurveSampleCount>& depthCurve,
     RenderDetail detail,
     float interactionPointFraction,
     const std::vector<HideBox>& displayHideBoxes,
@@ -58,6 +68,10 @@ class PointCloudRenderer {
   unsigned int program_ = 0;
   int viewProjectionLocation_ = -1;
   int pointSizeLocation_ = -1;
+  int colorModeLocation_ = -1;
+  int cameraPositionLocation_ = -1;
+  int depthRangeLocation_ = -1;
+  int depthCurveLocation_ = -1;
   int hideBoxCountLocation_ = -1;
   int hideBoxTextureLocation_ = -1;
   unsigned int hideBoxTexture_ = 0;
