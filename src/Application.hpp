@@ -7,6 +7,8 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <mutex>
+#include <thread>
 #include <unordered_map>
 
 struct GLFWwindow;
@@ -29,7 +31,6 @@ class Application {
     kIdle,
     kCollecting,
     kSearching,
-    kFinalizing,
     kDeleting,
   };
 
@@ -104,6 +105,19 @@ class Application {
     std::size_t operator()(const ExactPointKey& key) const;
   };
 
+  struct IsolatedSearchWorkerState {
+    bool running = false;
+    bool completed = false;
+    bool hasError = false;
+    IsolatedSelectionWorkflowState phase = IsolatedSelectionWorkflowState::kIdle;
+    std::size_t processed = 0;
+    std::size_t total = 0;
+    std::size_t visiblePointCount = 0;
+    std::size_t matchedCount = 0;
+    std::string message;
+    std::vector<std::uint32_t> completedMatches;
+  };
+
   void InitializeWindow();
   void InitializeImGui();
   void Shutdown();
@@ -124,6 +138,7 @@ class Application {
   void StartIsolatedSelectionPreview();
   void StartIsolatedSelectionDeletion();
   void UpdateIsolatedSelectionWorkflow();
+  void CancelIsolatedSelectionSearch();
   void StartOpenDialog();
   void ResetView();
   void OpenPointCloud(const std::filesystem::path& path);
@@ -225,17 +240,12 @@ class Application {
   std::size_t isolatedMatchedCount_ = 0;
   IsolatedSelectionWorkflowState isolatedSelectionWorkflowState_ = IsolatedSelectionWorkflowState::kIdle;
   std::vector<std::uint32_t> isolatedMatchedPointIndices_;
-  std::vector<DeletionGridKey> isolatedSearchCellKeys_;
-  std::vector<DeletionGridKey> isolatedNeighborOffsets_;
-  std::unordered_map<DeletionGridKey, std::vector<std::uint32_t>, DeletionGridKeyHash> isolatedSearchGrid_;
-  std::unordered_map<ExactPointKey, std::uint32_t, ExactPointKeyHash> isolatedExactPointCounts_;
-  std::vector<std::uint8_t> isolatedPointHasNeighbor_;
   std::vector<PointVertex> isolatedDeletionWorkingPoints_;
   std::size_t isolatedVisiblePointCount_ = 0;
   std::size_t isolatedProcessCursor_ = 0;
-  int isolatedNeighborOffsetCursor_ = -1;
-  std::size_t isolatedLeftCursor_ = 0;
-  std::size_t isolatedRightCursor_ = 0;
+  std::mutex isolatedSearchWorkerMutex_;
+  IsolatedSearchWorkerState isolatedSearchWorkerState_;
+  std::jthread isolatedSearchWorker_;
   bool useImGuiMenuBar_ = false;
   RenderDetail activeRenderDetail_ = RenderDetail::kFull;
   bool glfwInitialized_ = false;
