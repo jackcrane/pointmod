@@ -1,5 +1,7 @@
 # pointmod
 
+<img width="3840" height="2088" alt="Screenshot 2026-03-26 010756 (1)" src="https://github.com/user-attachments/assets/f752c48f-f279-4e2c-917b-4e13b3d0d2e1" />
+
 Minimal native point cloud viewer scaffold built with Dear ImGui, GLFW and OpenGL.
 
 Current scope:
