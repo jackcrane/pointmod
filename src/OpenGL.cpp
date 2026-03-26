@@ -9,6 +9,8 @@ PFNPOINTMODGLUNIFORM2FPROC Uniform2f = nullptr;
 PFNPOINTMODGLUNIFORM3FPROC Uniform3f = nullptr;
 PFNPOINTMODGLUNIFORM1FVPROC Uniform1fv = nullptr;
 PFNPOINTMODGLDRAWARRAYSPROC DrawArrays = nullptr;
+PFNPOINTMODGLBLENDFUNCPROC BlendFunc = nullptr;
+PFNPOINTMODGLDEPTHMASKPROC DepthMask = nullptr;
 
 }  // namespace pointmod::gl
 #endif
@@ -29,12 +31,16 @@ bool InitializeOpenGLBindings() {
   gl::Uniform3f = reinterpret_cast<PFNPOINTMODGLUNIFORM3FPROC>(imgl3wGetProcAddress("glUniform3f"));
   gl::Uniform1fv = reinterpret_cast<PFNPOINTMODGLUNIFORM1FVPROC>(imgl3wGetProcAddress("glUniform1fv"));
   gl::DrawArrays = reinterpret_cast<PFNPOINTMODGLDRAWARRAYSPROC>(imgl3wGetProcAddress("glDrawArrays"));
+  gl::BlendFunc = reinterpret_cast<PFNPOINTMODGLBLENDFUNCPROC>(imgl3wGetProcAddress("glBlendFunc"));
+  gl::DepthMask = reinterpret_cast<PFNPOINTMODGLDEPTHMASKPROC>(imgl3wGetProcAddress("glDepthMask"));
   return gl::BindAttribLocation != nullptr &&
     gl::Uniform1f != nullptr &&
     gl::Uniform2f != nullptr &&
     gl::Uniform3f != nullptr &&
     gl::Uniform1fv != nullptr &&
-    gl::DrawArrays != nullptr;
+    gl::DrawArrays != nullptr &&
+    gl::BlendFunc != nullptr &&
+    gl::DepthMask != nullptr;
 #endif
 }
 

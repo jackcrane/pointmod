@@ -43,6 +43,8 @@ typedef void(APIENTRYP PFNPOINTMODGLUNIFORM2FPROC)(GLint location, GLfloat v0, G
 typedef void(APIENTRYP PFNPOINTMODGLUNIFORM3FPROC)(GLint location, GLfloat v0, GLfloat v1, GLfloat v2);
 typedef void(APIENTRYP PFNPOINTMODGLUNIFORM1FVPROC)(GLint location, GLsizei count, const GLfloat* value);
 typedef void(APIENTRYP PFNPOINTMODGLDRAWARRAYSPROC)(GLenum mode, GLint first, GLsizei count);
+typedef void(APIENTRYP PFNPOINTMODGLBLENDFUNCPROC)(GLenum sfactor, GLenum dfactor);
+typedef void(APIENTRYP PFNPOINTMODGLDEPTHMASKPROC)(GLboolean flag);
 
 namespace pointmod::gl {
 
@@ -52,6 +54,8 @@ extern PFNPOINTMODGLUNIFORM2FPROC Uniform2f;
 extern PFNPOINTMODGLUNIFORM3FPROC Uniform3f;
 extern PFNPOINTMODGLUNIFORM1FVPROC Uniform1fv;
 extern PFNPOINTMODGLDRAWARRAYSPROC DrawArrays;
+extern PFNPOINTMODGLBLENDFUNCPROC BlendFunc;
+extern PFNPOINTMODGLDEPTHMASKPROC DepthMask;
 
 }  // namespace pointmod::gl
 
@@ -61,6 +65,8 @@ extern PFNPOINTMODGLDRAWARRAYSPROC DrawArrays;
 #define glUniform3f pointmod::gl::Uniform3f
 #define glUniform1fv pointmod::gl::Uniform1fv
 #define glDrawArrays pointmod::gl::DrawArrays
+#define glBlendFunc pointmod::gl::BlendFunc
+#define glDepthMask pointmod::gl::DepthMask
 #endif
 
 namespace pointmod {
