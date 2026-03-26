@@ -30,5 +30,6 @@ PointCloudData LoadAsciiPly(
   std::stop_token stopToken,
   const PlyLoadProgressCallback& onProgress,
   const PlyPointChunkCallback& onChunk);
+void SaveAsciiPly(const std::filesystem::path& path, const std::vector<PointVertex>& points);
 
 }  // namespace pointmod

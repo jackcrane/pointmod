@@ -1,6 +1,7 @@
 #include "FileDialog.hpp"
 
 #include <array>
+#include <cstdlib>
 
 #if defined(_WIN32)
 #ifndef NOMINMAX
@@ -30,6 +31,29 @@ std::optional<std::filesystem::path> OpenPointCloudDialog() {
   dialogConfig.lpstrDefExt = L"ply";
 
   if (GetOpenFileNameW(&dialogConfig) == FALSE) {
+    return std::nullopt;
+  }
+
+  return std::filesystem::path(selectedPath.data());
+}
+
+std::optional<std::filesystem::path> SavePointCloudDialog(const std::filesystem::path& suggestedPath) {
+  std::array<wchar_t, 32768> selectedPath{};
+  const std::wstring suggestedPathString = suggestedPath.wstring();
+  if (!suggestedPathString.empty()) {
+    suggestedPathString.copy(selectedPath.data(), selectedPath.size() - 1);
+  }
+
+  OPENFILENAMEW dialogConfig{};
+  dialogConfig.lStructSize = sizeof(dialogConfig);
+  dialogConfig.lpstrFilter = L"Point Clouds (*.ply)\0*.ply\0All Files (*.*)\0*.*\0";
+  dialogConfig.lpstrFile = selectedPath.data();
+  dialogConfig.nMaxFile = static_cast<DWORD>(selectedPath.size());
+  dialogConfig.lpstrTitle = L"Export Point Cloud";
+  dialogConfig.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_EXPLORER;
+  dialogConfig.lpstrDefExt = L"ply";
+
+  if (GetSaveFileNameW(&dialogConfig) == FALSE) {
     return std::nullopt;
   }
 
@@ -68,6 +92,21 @@ std::optional<std::string> RunDialogCommand(const char* command) {
   return output;
 }
 
+std::string ShellEscapeSingleQuoted(const std::string& value) {
+  std::string escaped;
+  escaped.reserve(value.size() + 2);
+  escaped += '\'';
+  for (char ch : value) {
+    if (ch == '\'') {
+      escaped += "'\\''";
+    } else {
+      escaped += ch;
+    }
+  }
+  escaped += '\'';
+  return escaped;
+}
+
 }  // namespace
 
 std::optional<std::filesystem::path> OpenPointCloudDialog() {
@@ -82,6 +121,27 @@ std::optional<std::filesystem::path> OpenPointCloudDialog() {
   }
 
   if (std::optional<std::string> selectedPath = RunDialogCommand(kKDialogCommand)) {
+    return std::filesystem::path(*selectedPath);
+  }
+
+  return std::nullopt;
+}
+
+std::optional<std::filesystem::path> SavePointCloudDialog(const std::filesystem::path& suggestedPath) {
+  const std::string escapedPath = ShellEscapeSingleQuoted(suggestedPath.string());
+  const std::string zenityCommand =
+    "zenity --file-selection --save --confirm-overwrite "
+    "--title='Export Point Cloud' "
+    "--filename=" + escapedPath + " "
+    "--file-filter='Point Clouds | *.ply' 2>/dev/null";
+  const std::string kdialogCommand =
+    "kdialog --getsavefilename " + escapedPath + " '*.ply|Point Clouds (*.ply)' 2>/dev/null";
+
+  if (std::optional<std::string> selectedPath = RunDialogCommand(zenityCommand.c_str())) {
+    return std::filesystem::path(*selectedPath);
+  }
+
+  if (std::optional<std::string> selectedPath = RunDialogCommand(kdialogCommand.c_str())) {
     return std::filesystem::path(*selectedPath);
   }
 

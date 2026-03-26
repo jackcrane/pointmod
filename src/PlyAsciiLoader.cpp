@@ -5,7 +5,9 @@
 #include <cstdint>
 #include <cstdlib>
 #include <fstream>
+#include <iomanip>
 #include <ios>
+#include <limits>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
@@ -100,9 +102,6 @@ HeaderInfo ParseHeader(std::istream& input) {
     if (trimmed == "end_header") {
       if (!sawFormat) {
         throw std::runtime_error("PLY header is missing a format declaration.");
-      }
-      if (info.vertexCount == 0) {
-        throw std::runtime_error("PLY file does not declare any vertices.");
       }
       return info;
     }
@@ -336,6 +335,41 @@ PointCloudData LoadAsciiPly(
     "Ready");
 
   return result;
+}
+
+void SaveAsciiPly(const std::filesystem::path& path, const std::vector<PointVertex>& points) {
+  std::ofstream output(path, std::ios::out | std::ios::trunc);
+  if (!output.is_open()) {
+    throw std::runtime_error("Failed to open export path.");
+  }
+
+  output << "ply\n";
+  output << "format ascii 1.0\n";
+  output << "element vertex " << points.size() << '\n';
+  output << "property float x\n";
+  output << "property float y\n";
+  output << "property float z\n";
+  output << "property uchar red\n";
+  output << "property uchar green\n";
+  output << "property uchar blue\n";
+  output << "property uchar alpha\n";
+  output << "end_header\n";
+
+  output << std::setprecision(std::numeric_limits<float>::max_digits10);
+  for (const PointVertex& point : points) {
+    output
+      << point.x << ' '
+      << point.y << ' '
+      << point.z << ' '
+      << static_cast<unsigned int>(point.r) << ' '
+      << static_cast<unsigned int>(point.g) << ' '
+      << static_cast<unsigned int>(point.b) << ' '
+      << static_cast<unsigned int>(point.a) << '\n';
+  }
+
+  if (!output.good()) {
+    throw std::runtime_error("Failed while writing the exported point cloud.");
+  }
 }
 
 }  // namespace pointmod

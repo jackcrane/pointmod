@@ -25,11 +25,13 @@ namespace pointmod {
 namespace {
 
 constexpr UINT_PTR kOpenMenuCommandId = 1001;
-constexpr UINT_PTR kResetViewMenuCommandId = 1002;
-constexpr UINT_PTR kQuitMenuCommandId = 1003;
+constexpr UINT_PTR kSaveMenuCommandId = 1002;
+constexpr UINT_PTR kResetViewMenuCommandId = 1003;
+constexpr UINT_PTR kQuitMenuCommandId = 1004;
 
 struct NativeMenuState {
   std::function<void()> onOpenRequested;
+  std::function<void()> onSaveRequested;
   std::function<void()> onResetViewRequested;
   WNDPROC previousWindowProc = nullptr;
   HMENU menuBar = nullptr;
@@ -48,6 +50,11 @@ LRESULT CALLBACK NativeMenuWindowProc(HWND hwnd, UINT message, WPARAM wParam, LP
       case kOpenMenuCommandId:
         if (stateIt->second.onOpenRequested) {
           stateIt->second.onOpenRequested();
+        }
+        return 0;
+      case kSaveMenuCommandId:
+        if (stateIt->second.onSaveRequested) {
+          stateIt->second.onSaveRequested();
         }
         return 0;
       case kResetViewMenuCommandId:
@@ -75,6 +82,7 @@ LRESULT CALLBACK NativeMenuWindowProc(HWND hwnd, UINT message, WPARAM wParam, LP
 bool InstallNativeMenu(
   GLFWwindow* window,
   const std::function<void()>& onOpenRequested,
+  const std::function<void()>& onSaveRequested,
   const std::function<void()>& onResetViewRequested) {
   if (window == nullptr) {
     return false;
@@ -104,6 +112,7 @@ bool InstallNativeMenu(
   }
 
   AppendMenuW(fileMenu, MF_STRING, kOpenMenuCommandId, L"&Open...\tCtrl+O");
+  AppendMenuW(fileMenu, MF_STRING, kSaveMenuCommandId, L"&Save As...\tCtrl+S");
   AppendMenuW(fileMenu, MF_SEPARATOR, 0, nullptr);
   AppendMenuW(fileMenu, MF_STRING, kQuitMenuCommandId, L"E&xit");
   AppendMenuW(viewMenu, MF_STRING, kResetViewMenuCommandId, L"&Reset view");
@@ -117,6 +126,7 @@ bool InstallNativeMenu(
 
   NativeMenuState state;
   state.onOpenRequested = onOpenRequested;
+  state.onSaveRequested = onSaveRequested;
   state.onResetViewRequested = onResetViewRequested;
   state.menuBar = menuBar;
   state.previousWindowProc = reinterpret_cast<WNDPROC>(
@@ -156,7 +166,7 @@ void UninstallNativeMenu(GLFWwindow* window) {
 
 #else
 
-bool InstallNativeMenu(GLFWwindow*, const std::function<void()>&, const std::function<void()>&) {
+bool InstallNativeMenu(GLFWwindow*, const std::function<void()>&, const std::function<void()>&, const std::function<void()>&) {
   return false;
 }
 

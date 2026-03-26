@@ -151,8 +151,10 @@ class Application {
   void UpdateIsolatedSelectionWorkflow();
   void CancelIsolatedSelectionSearch();
   void StartOpenDialog();
+  void StartSaveDialog();
   void ResetView();
   void OpenPointCloud(const std::filesystem::path& path);
+  void ExportPointCloud(const std::filesystem::path& path);
   void AddHideBox();
   void ClearHideBoxes();
   void ClearPointSelections();
@@ -190,6 +192,7 @@ class Application {
   double lastCursorY_ = 0.0;
   bool firstCursorSample_ = true;
   bool openShortcutLatched_ = false;
+  bool saveShortcutLatched_ = false;
   bool cameraFramed_ = false;
   bool cameraTouched_ = false;
   bool interactionActive_ = false;

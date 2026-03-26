@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <bit>
 #include <cfloat>
+#include <filesystem>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -741,6 +742,35 @@ RenderDetail ChooseRenderDetail(bool interactionActive) {
   return RenderDetail::kFull;
 }
 
+std::filesystem::path BuildSuggestedExportPath(const std::filesystem::path& sourcePath) {
+  const std::filesystem::path directory = sourcePath.has_parent_path()
+    ? sourcePath.parent_path()
+    : std::filesystem::current_path();
+  const std::string stem = sourcePath.stem().empty() ? "pointcloud" : sourcePath.stem().string();
+  return directory / (stem + "-modified.ply");
+}
+
+std::filesystem::path EnsurePlyExtension(const std::filesystem::path& path) {
+  if (path.extension() == ".ply") {
+    return path;
+  }
+  if (path.has_extension()) {
+    return path;
+  }
+  std::filesystem::path withExtension = path;
+  withExtension += ".ply";
+  return withExtension;
+}
+
+std::filesystem::path NormalizePathForComparison(const std::filesystem::path& path) {
+  std::error_code error;
+  const std::filesystem::path absolutePath = std::filesystem::absolute(path, error);
+  if (error) {
+    return path.lexically_normal();
+  }
+  return absolutePath.lexically_normal();
+}
+
 }  // namespace
 
 std::size_t Application::DeletionGridKeyHash::operator()(const DeletionGridKey& key) const {
@@ -831,12 +861,9 @@ void Application::InitializeWindow() {
   const bool nativeMenuInstalled = InstallNativeMenu(
     window_,
     [this]() { StartOpenDialog(); },
+    [this]() { StartSaveDialog(); },
     [this]() { ResetView(); });
-#if defined(__APPLE__)
-  useImGuiMenuBar_ = false;
-#else
   useImGuiMenuBar_ = !nativeMenuInstalled;
-#endif
 }
 
 void Application::InitializeImGui() {
@@ -899,10 +926,26 @@ float Application::RenderMenuBar() {
     const bool hasLoadedCloud = !currentCloud_.points.empty();
     const bool hasHideBoxes = !hideBoxes_.empty();
     const bool hasPointSelections = !pointSelections_.empty();
+    const char* openShortcutLabel =
+#if defined(__APPLE__)
+      "Cmd+O";
+#else
+      "Ctrl+O";
+#endif
+    const char* saveShortcutLabel =
+#if defined(__APPLE__)
+      "Cmd+S";
+#else
+      "Ctrl+S";
+#endif
 
     if (ImGui::BeginMenu("File")) {
-      if (ImGui::MenuItem("Open...", "Ctrl+O")) {
+      if (ImGui::MenuItem("Open...", openShortcutLabel)) {
         StartOpenDialog();
+      }
+      const bool canSave = !currentCloud_.points.empty() && !loader_.Snapshot().loading;
+      if (ImGui::MenuItem("Save As...", saveShortcutLabel, false, canSave)) {
+        StartSaveDialog();
       }
       ImGui::Separator();
       if (ImGui::MenuItem("Quit")) {
@@ -959,6 +1002,17 @@ void Application::RenderUi() {
     }
     ImGui::SameLine();
     const bool hasLoadedCloud = !currentCloud_.points.empty();
+    const bool loadingCloud = loader_.Snapshot().loading;
+    if (!hasLoadedCloud || loadingCloud) {
+      ImGui::BeginDisabled();
+    }
+    if (ImGui::Button("Save As...")) {
+      StartSaveDialog();
+    }
+    if (!hasLoadedCloud || loadingCloud) {
+      ImGui::EndDisabled();
+    }
+    ImGui::SameLine();
     if (!hasLoadedCloud) {
       ImGui::BeginDisabled();
     }
@@ -980,9 +1034,9 @@ void Application::RenderUi() {
     }
     ImGui::SameLine();
 #if defined(__APPLE__)
-    ImGui::TextUnformatted("Shortcut: Cmd+O or drag and drop");
+    ImGui::TextUnformatted("Shortcuts: Cmd+O, Cmd+S, or drag and drop");
 #else
-    ImGui::TextUnformatted("Shortcut: Ctrl+O or drag and drop");
+    ImGui::TextUnformatted("Shortcuts: Ctrl+O, Ctrl+S, or drag and drop");
 #endif
 
     const bool hasHideBoxes = !hideBoxes_.empty();
@@ -1877,17 +1931,6 @@ void Application::UpdatePointSelectionInteraction() {
     return;
   }
 
-  if (ImGui::IsMouseDown(1) || ImGui::IsMouseDown(2)) {
-    hoveredPointActive_ = false;
-    hoverPickCache_.valid = false;
-    if (!ImGui::IsMouseDown(0)) {
-      freeformSelection_ = {};
-    }
-    drawScaleHandles();
-    drawFreeformSelection();
-    return;
-  }
-
   const Vec3 handleDirection = BuildScaleHandleDirection(camera_);
   float bestHandleDistanceSquared = kPointScaleHandleRadiusPixels * kPointScaleHandleRadiusPixels;
 
@@ -2019,6 +2062,17 @@ void Application::UpdatePointSelectionInteraction() {
       drawFreeformSelection();
       return;
     }
+  }
+
+  if (ImGui::IsMouseDown(1) || ImGui::IsMouseDown(2)) {
+    hoveredPointActive_ = false;
+    hoverPickCache_.valid = false;
+    if (!ImGui::IsMouseDown(0)) {
+      freeformSelection_ = {};
+    }
+    drawScaleHandles();
+    drawFreeformSelection();
+    return;
   }
 
   if (pointScaleHandleHovered_ && ImGui::IsMouseClicked(0)) {
@@ -3086,11 +3140,21 @@ void Application::HandleCameraInput() {
 #else
     controlPressed && glfwGetKey(window_, GLFW_KEY_O) == GLFW_PRESS;
 #endif
+  const bool saveShortcutPressed =
+#if defined(__APPLE__)
+    commandPressed && glfwGetKey(window_, GLFW_KEY_S) == GLFW_PRESS;
+#else
+    controlPressed && glfwGetKey(window_, GLFW_KEY_S) == GLFW_PRESS;
+#endif
 
   if (openShortcutPressed && !openShortcutLatched_ && !io.WantCaptureKeyboard) {
     StartOpenDialog();
   }
   openShortcutLatched_ = openShortcutPressed;
+  if (saveShortcutPressed && !saveShortcutLatched_ && !io.WantCaptureKeyboard) {
+    StartSaveDialog();
+  }
+  saveShortcutLatched_ = saveShortcutPressed;
   interactionActive_ = hideBoxGizmoDrag_.active || pointScaleDrag_.active || freeformSelection_.active;
 
   const bool gizmoCapturingLeftMouse =
@@ -3336,6 +3400,23 @@ void Application::StartOpenDialog() {
   }
 }
 
+void Application::StartSaveDialog() {
+  if (currentCloud_.points.empty()) {
+    statusMessage_ = "Load a point cloud before exporting.";
+    return;
+  }
+
+  if (loader_.Snapshot().loading) {
+    statusMessage_ = "Wait for the point cloud to finish loading before exporting.";
+    return;
+  }
+
+  const std::filesystem::path suggestedPath = BuildSuggestedExportPath(currentCloud_.sourcePath);
+  if (std::optional<std::filesystem::path> selectedPath = SavePointCloudDialog(suggestedPath)) {
+    ExportPointCloud(EnsurePlyExtension(*selectedPath));
+  }
+}
+
 void Application::ResetView() {
   if (!currentCloud_.bounds.IsValid()) {
     return;
@@ -3405,6 +3486,38 @@ void Application::OpenPointCloud(const std::filesystem::path& path) {
   activeRenderDetail_ = RenderDetail::kFull;
   loader_.Start(path);
   statusMessage_ = "Opening " + path.filename().string();
+}
+
+void Application::ExportPointCloud(const std::filesystem::path& path) {
+  if (path.empty()) {
+    statusMessage_ = "No export path selected.";
+    return;
+  }
+
+  if (NormalizePathForComparison(path) == NormalizePathForComparison(currentCloud_.sourcePath)) {
+    statusMessage_ = "Export cancelled: choose a new file instead of overwriting the original input.";
+    return;
+  }
+
+  std::vector<PointVertex> exportPoints;
+  exportPoints.reserve(currentCloud_.points.size());
+  for (const PointVertex& point : currentCloud_.points) {
+    if (IsPointHidden(PointPosition(point), committedHideBoxes_)) {
+      continue;
+    }
+
+    PointVertex exportedPoint = point;
+    exportedPoint.flags = 0;
+    exportPoints.push_back(exportedPoint);
+  }
+
+  try {
+    SaveAsciiPly(path, exportPoints);
+    statusMessage_ =
+      "Exported " + std::to_string(exportPoints.size()) + " points to " + path.filename().string() + ".";
+  } catch (const std::exception& exception) {
+    statusMessage_ = std::string("Export failed: ") + exception.what();
+  }
 }
 
 void Application::AddHideBox() {

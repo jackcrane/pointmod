@@ -6,5 +6,6 @@
 namespace pointmod {
 
 std::optional<std::filesystem::path> OpenPointCloudDialog();
+std::optional<std::filesystem::path> SavePointCloudDialog(const std::filesystem::path& suggestedPath);
 
 }  // namespace pointmod
