@@ -44,6 +44,7 @@ constexpr float kInteractionPointDropFactor = 0.5f;
 constexpr float kMinInteractionPointFraction = 0.001f;
 constexpr double kInteractionTuneIntervalSeconds = 0.2;
 constexpr Vec3 kWorldUp = {0.0f, 0.0f, 1.0f};
+constexpr std::uint8_t kPointFlagMarkedForDeletion = 1;
 
 struct CameraRay {
   Vec3 origin = {0.0f, 0.0f, 0.0f};
@@ -126,6 +127,10 @@ float LengthSquared(const ImVec2& value) {
 
 float DistanceSquared(const ImVec2& a, const ImVec2& b) {
   return LengthSquared(Subtract(a, b));
+}
+
+float Clamp01(float value) {
+  return (std::clamp)(value, 0.0f, 1.0f);
 }
 
 ImVec2 Normalize2D(const ImVec2& value) {
@@ -261,6 +266,32 @@ bool IsPointHidden(const Vec3& point, const std::vector<HideBox>& hideBoxes) {
     }
   }
   return false;
+}
+
+bool IsInsideSphere(const Vec3& point, const SelectionSphere& sphere) {
+  const float radius = (std::max)(sphere.radius, 0.0f);
+  return Length(point - sphere.center) <= radius;
+}
+
+bool IsInsideConnector(const Vec3& point, const SelectionSphere& start, const SelectionSphere& end) {
+  const Vec3 axis = end.center - start.center;
+  const float axisLengthSquared = Dot(axis, axis);
+  if (axisLengthSquared <= 0.0000001f) {
+    return false;
+  }
+
+  const float t = Clamp01(Dot(point - start.center, axis) / axisLengthSquared);
+  const Vec3 closestPoint = start.center + axis * t;
+  const float radius = start.radius + (end.radius - start.radius) * t;
+  return Length(point - closestPoint) <= (std::max)(radius, 0.0f);
+}
+
+Bounds ComputeBounds(const std::vector<PointVertex>& points) {
+  Bounds bounds;
+  for (const PointVertex& point : points) {
+    bounds.Expand(PointPosition(point));
+  }
+  return bounds;
 }
 
 float ComputePickRadiusPixels(float pointSize, float paddingPixels) {
@@ -544,6 +575,7 @@ int Application::Run() {
       UpdateHideBoxGizmo();
       UpdatePointSelectionInteraction();
       HandleCameraInput();
+      HandleDeletionInput();
       UpdateFrameStats();
       RenderScene();
       EndImGuiFrame();
@@ -778,7 +810,7 @@ void Application::RenderUi() {
         depthCurveDragValue_);
       ImGui::TextWrapped("Drag across the graph to remap brightness from near to far camera distance.");
     }
-    ImGui::TextWrapped("Controls: left click a point to add a red sphere, drag its red square grip to resize, right click a sphere to delete it, right drag orbit, middle drag or Shift+right drag pan, wheel zoom.");
+    ImGui::TextWrapped("Controls: left click a point to add a red sphere, drag its red square grip to resize, right click a sphere to delete it, backspace marks and confirms deletion, right drag orbit, middle drag or Shift+right drag pan, wheel zoom.");
 
     if (hasHideBoxes) {
       ImGui::Separator();
@@ -843,6 +875,26 @@ void Application::RenderUi() {
     } else if (ImGui::MenuItem("Delete point sphere")) {
       DeletePointSelection(pointContextMenuSelection_);
       pointContextMenuSelection_ = -1;
+      ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+  }
+
+  if (deletionDialogOpenRequested_) {
+    ImGui::OpenPopup("DeleteMarkedPointsDialog");
+    deletionDialogOpenRequested_ = false;
+  }
+  if (ImGui::BeginPopupModal("DeleteMarkedPointsDialog", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    if (!deletionConfirmPending_) {
+      ImGui::CloseCurrentPopup();
+      ImGui::EndPopup();
+      return;
+    }
+    ImGui::TextUnformatted("Points marked red will be deleted. Tap backspace again to confirm.");
+    if (deletionMarkedCount_ > 0) {
+      ImGui::Text("Marked points: %llu", static_cast<unsigned long long>(deletionMarkedCount_));
+    }
+    if (ImGui::Button("Close")) {
       ImGui::CloseCurrentPopup();
     }
     ImGui::EndPopup();
@@ -1310,6 +1362,13 @@ void Application::UpdatePointSelectionInteraction() {
     }
   };
 
+  if (deletionConfirmPending_) {
+    hoveredPointActive_ = false;
+    hoverPickCache_.valid = false;
+    drawScaleHandles();
+    return;
+  }
+
   if (pointScaleDrag_.active) {
     if (
       pointScaleDrag_.selectionIndex < 0 ||
@@ -1520,23 +1579,7 @@ void Application::RenderScene() {
   glClearColor(0.05f, 0.07f, 0.10f, 1.0f);
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-  std::vector<SelectionSphere> selectionSpheres;
-  selectionSpheres.reserve(pointSelections_.size());
-  for (const PointSelection& selection : pointSelections_) {
-    if (selection.pointIndex >= currentCloud_.points.size()) {
-      continue;
-    }
-
-    const Vec3 center = PointPosition(currentCloud_.points[selection.pointIndex]);
-    if (IsPointHidden(center, committedHideBoxes_)) {
-      continue;
-    }
-
-    selectionSpheres.push_back(SelectionSphere{
-      .center = center,
-      .radius = selection.radius,
-    });
-  }
+  const std::vector<SelectionSphere> selectionSpheres = BuildSelectionSpheres();
 
   bool drawHoveredPoint = hoveredPointActive_ && hoveredPointIndex_ < currentCloud_.points.size();
   if (drawHoveredPoint) {
@@ -1570,6 +1613,122 @@ void Application::RenderScene() {
     selectionSpheres,
     drawHoveredPoint,
     hoveredPoint);
+}
+
+std::vector<SelectionSphere> Application::BuildSelectionSpheres() const {
+  std::vector<SelectionSphere> selectionSpheres;
+  selectionSpheres.reserve(pointSelections_.size());
+  for (const PointSelection& selection : pointSelections_) {
+    if (selection.pointIndex >= currentCloud_.points.size()) {
+      continue;
+    }
+
+    const Vec3 center = PointPosition(currentCloud_.points[selection.pointIndex]);
+    if (IsPointHidden(center, committedHideBoxes_)) {
+      continue;
+    }
+
+    selectionSpheres.push_back(SelectionSphere{
+      .center = center,
+      .radius = selection.radius,
+    });
+  }
+  return selectionSpheres;
+}
+
+void Application::RebuildPointCloudRenderer() {
+  currentCloud_.bounds = ComputeBounds(currentCloud_.points);
+  currentCloud_.renderPointCount = static_cast<std::uint64_t>(currentCloud_.points.size());
+  renderer_.SetPointCloud(currentCloud_.points, currentCloud_.bounds);
+  if (committedHideBoxes_.empty()) {
+    visiblePointCount_ = currentCloud_.renderPointCount;
+    visiblePointCountAccurate_ = true;
+  } else {
+    visiblePointCountAccurate_ = false;
+  }
+}
+
+void Application::BeginDeletionMarking() {
+  const std::vector<SelectionSphere> selectionSpheres = BuildSelectionSpheres();
+  if (selectionSpheres.empty()) {
+    return;
+  }
+
+  deletionMarkedCount_ = 0;
+  for (PointVertex& point : currentCloud_.points) {
+    const Vec3 position = PointPosition(point);
+    bool marked = false;
+    for (std::size_t sphereIndex = 0; sphereIndex < selectionSpheres.size(); ++sphereIndex) {
+      if (IsInsideSphere(position, selectionSpheres[sphereIndex])) {
+        marked = true;
+        break;
+      }
+      if (sphereIndex > 0 && IsInsideConnector(position, selectionSpheres[sphereIndex - 1], selectionSpheres[sphereIndex])) {
+        marked = true;
+        break;
+      }
+    }
+
+    if (!marked) {
+      continue;
+    }
+
+    if ((point.flags & kPointFlagMarkedForDeletion) == 0) {
+      ++deletionMarkedCount_;
+    }
+    point.flags |= kPointFlagMarkedForDeletion;
+    point.r = 235;
+    point.g = 46;
+    point.b = 46;
+    point.a = 255;
+  }
+
+  ClearPointSelections();
+  hoveredPointActive_ = false;
+  hoverPickCache_.valid = false;
+  RebuildPointCloudRenderer();
+  deletionConfirmPending_ = deletionMarkedCount_ > 0;
+  deletionDialogOpenRequested_ = deletionConfirmPending_;
+  if (deletionConfirmPending_) {
+    statusMessage_ = "Marked " + std::to_string(deletionMarkedCount_) + " points for deletion. Press Backspace again to confirm.";
+  } else {
+    statusMessage_ = "No points fell inside the selected spheres.";
+  }
+}
+
+void Application::ConfirmDeletion() {
+  if (!deletionConfirmPending_) {
+    return;
+  }
+
+  const std::size_t deletedPointCount = static_cast<std::size_t>(std::count_if(
+    currentCloud_.points.begin(),
+    currentCloud_.points.end(),
+    [](const PointVertex& point) {
+      return (point.flags & kPointFlagMarkedForDeletion) != 0;
+    }));
+  currentCloud_.points.erase(
+    std::remove_if(
+      currentCloud_.points.begin(),
+      currentCloud_.points.end(),
+      [](const PointVertex& point) {
+        return (point.flags & kPointFlagMarkedForDeletion) != 0;
+      }),
+    currentCloud_.points.end());
+
+  deletionConfirmPending_ = false;
+  deletionMarkedCount_ = 0;
+  ClearPointSelections();
+  hoveredPointActive_ = false;
+  hoverPickCache_.valid = false;
+  pointContextMenuSelection_ = -1;
+  pointContextMenuOpenRequested_ = false;
+  RebuildPointCloudRenderer();
+  if (!cameraTouched_ && currentCloud_.bounds.IsValid()) {
+    camera_.Frame(currentCloud_.bounds);
+    cameraFramed_ = true;
+  }
+  statusMessage_ = "Deleted " + std::to_string(deletedPointCount) + " points.";
 }
 
 void Application::UpdateCloudLoading() {
@@ -1766,6 +1925,31 @@ void Application::HandleCameraInput() {
   pendingScrollY_ = 0.0f;
 }
 
+void Application::HandleDeletionInput() {
+  ImGuiIO& io = ImGui::GetIO();
+  const bool backspacePressed = glfwGetKey(window_, GLFW_KEY_BACKSPACE) == GLFW_PRESS;
+  if (!backspacePressed) {
+    backspaceLatched_ = false;
+    return;
+  }
+
+  if (backspaceLatched_ || io.WantCaptureKeyboard) {
+    return;
+  }
+  backspaceLatched_ = true;
+
+  if (deletionConfirmPending_) {
+    ConfirmDeletion();
+    return;
+  }
+
+  if (pointSelections_.empty()) {
+    return;
+  }
+
+  BeginDeletionMarking();
+}
+
 void Application::StartOpenDialog() {
   if (std::optional<std::filesystem::path> selectedPath = OpenPointCloudDialog()) {
     OpenPointCloud(*selectedPath);
@@ -1805,6 +1989,10 @@ void Application::OpenPointCloud(const std::filesystem::path& path) {
   ResetHideBoxGizmo();
   ClearPointSelections();
   hoverPickCache_.valid = false;
+  backspaceLatched_ = false;
+  deletionConfirmPending_ = false;
+  deletionDialogOpenRequested_ = false;
+  deletionMarkedCount_ = 0;
   currentCloud_.sourcePath = path;
   cameraFramed_ = false;
   cameraTouched_ = false;

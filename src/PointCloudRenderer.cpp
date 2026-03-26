@@ -27,6 +27,7 @@ constexpr const char* kVertexShaderSource = R"(
 #version 150 core
 in vec3 aPosition;
 in vec4 aColor;
+in float aFlags;
 
 uniform mat4 uViewProjection;
 uniform float uPointSize;
@@ -43,6 +44,7 @@ flat out int vHidden;
 const int kPointColorModeSource = 0;
 const int kPointColorModeDepth = 1;
 const int kDepthCurveSampleCount = 32;
+const float kPointFlagMarkedForDeletion = 1.0;
 
 vec4 QuaternionConjugate(vec4 q) {
   return vec4(-q.xyz, q.w);
@@ -66,7 +68,9 @@ void main() {
   gl_PointSize = uPointSize;
   vHidden = 0;
 
-  if (uColorMode == kPointColorModeDepth) {
+  if (aFlags >= kPointFlagMarkedForDeletion) {
+    vColor = vec4(0.92, 0.18, 0.18, 1.0);
+  } else if (uColorMode == kPointColorModeDepth) {
     float distanceFromCamera = distance(aPosition, uCameraPosition);
     float normalizedDepth = clamp(
       (distanceFromCamera - uDepthRange.x) / max(uDepthRange.y - uDepthRange.x, 0.0001),
@@ -130,6 +134,8 @@ void UploadBuffer(
   glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(PointVertex), reinterpret_cast<void*>(offsetof(PointVertex, x)));
   glEnableVertexAttribArray(1);
   glVertexAttribPointer(1, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(PointVertex), reinterpret_cast<void*>(offsetof(PointVertex, r)));
+  glEnableVertexAttribArray(2);
+  glVertexAttribPointer(2, 1, GL_UNSIGNED_BYTE, GL_FALSE, sizeof(PointVertex), reinterpret_cast<void*>(offsetof(PointVertex, flags)));
   glBindBuffer(GL_ARRAY_BUFFER, 0);
   glBindVertexArray(0);
 }
@@ -398,6 +404,7 @@ void PointCloudRenderer::Initialize() {
   glAttachShader(program_, fragmentShader);
   glBindAttribLocation(program_, 0, "aPosition");
   glBindAttribLocation(program_, 1, "aColor");
+  glBindAttribLocation(program_, 2, "aFlags");
   glLinkProgram(program_);
 
   int linked = 0;
@@ -442,6 +449,8 @@ void PointCloudRenderer::Initialize() {
   glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(PointVertex), reinterpret_cast<void*>(offsetof(PointVertex, x)));
   glEnableVertexAttribArray(1);
   glVertexAttribPointer(1, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(PointVertex), reinterpret_cast<void*>(offsetof(PointVertex, r)));
+  glEnableVertexAttribArray(2);
+  glVertexAttribPointer(2, 1, GL_UNSIGNED_BYTE, GL_FALSE, sizeof(PointVertex), reinterpret_cast<void*>(offsetof(PointVertex, flags)));
   glBindBuffer(GL_ARRAY_BUFFER, 0);
   glBindVertexArray(0);
 

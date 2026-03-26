@@ -21,6 +21,7 @@ struct PointVertex {
   std::uint8_t g = 255;
   std::uint8_t b = 255;
   std::uint8_t a = 255;
+  std::uint8_t flags = 0;
 };
 
 struct HideBox {

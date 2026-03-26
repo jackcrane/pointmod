@@ -44,7 +44,7 @@ class Application {
 
   struct PointSelection {
     std::size_t pointIndex = 0;
-    float radius = 2.0f;
+    float radius = 0.05f;
   };
 
   struct PointScaleDragState {
@@ -76,6 +76,7 @@ class Application {
   void UpdateFrameStats();
   void UpdateInteractionPointBudget();
   void HandleCameraInput();
+  void HandleDeletionInput();
   void StartOpenDialog();
   void ResetView();
   void OpenPointCloud(const std::filesystem::path& path);
@@ -83,6 +84,10 @@ class Application {
   void ClearHideBoxes();
   void ClearPointSelections();
   void DeletePointSelection(int selectionIndex);
+  void RebuildPointCloudRenderer();
+  std::vector<SelectionSphere> BuildSelectionSpheres() const;
+  void BeginDeletionMarking();
+  void ConfirmDeletion();
   void CommitHideBoxes();
   void ResetHideBoxGizmo();
 
@@ -146,6 +151,10 @@ class Application {
   float pointContextMenuMouseY_ = 0.0f;
   bool pointContextMenuOpenRequested_ = false;
   bool consumeRightMouseOrbit_ = false;
+  bool backspaceLatched_ = false;
+  bool deletionConfirmPending_ = false;
+  bool deletionDialogOpenRequested_ = false;
+  std::size_t deletionMarkedCount_ = 0;
   RenderDetail activeRenderDetail_ = RenderDetail::kFull;
   bool glfwInitialized_ = false;
   bool imguiInitialized_ = false;
