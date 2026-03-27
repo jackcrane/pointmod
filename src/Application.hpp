@@ -165,6 +165,7 @@ class Application {
   void StartOpenDialog();
   void StartSaveDialog();
   void ResetView();
+  void SetWorldUpAxis(WorldUpAxis axis);
   void OpenPointCloud(const std::filesystem::path& path);
   void ExportPointCloud(const std::filesystem::path& path);
   void UpdateSaveProgress(std::string message, std::uint64_t processed, std::uint64_t total, bool forcePresent = false);
@@ -301,6 +302,7 @@ class Application {
   std::mutex isolatedSearchWorkerMutex_;
   IsolatedSearchWorkerState isolatedSearchWorkerState_;
   std::jthread isolatedSearchWorker_;
+  WorldUpAxis worldUpAxis_ = WorldUpAxis::kZ;
   bool useImGuiMenuBar_ = false;
   bool taskManagerOpen_ = false;
   RenderDetail activeRenderDetail_ = RenderDetail::kFull;

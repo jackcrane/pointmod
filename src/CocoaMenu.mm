@@ -13,6 +13,8 @@ struct NativeMenuState {
   std::function<void()> onSaveRequested;
   std::function<void()> onResetViewRequested;
   std::function<void()> onTaskManagerRequested;
+  std::function<void(int)> onSetUpAxisRequested;
+  std::function<int()> selectedUpAxisIndex;
   NSMenu* previousMainMenu = nil;
   id handler = nil;
 };
@@ -46,6 +48,10 @@ NSMenuItem* AddMenuItem(
 - (IBAction)handleSave:(id)sender;
 - (IBAction)handleResetView:(id)sender;
 - (IBAction)handleTaskManager:(id)sender;
+- (IBAction)handleSetYUp:(id)sender;
+- (IBAction)handleSetNegativeYUp:(id)sender;
+- (IBAction)handleSetZUp:(id)sender;
+- (IBAction)handleSetNegativeZUp:(id)sender;
 @end
 
 @implementation PointmodMenuHandler
@@ -82,6 +88,66 @@ NSMenuItem* AddMenuItem(
   }
 }
 
+- (IBAction)handleSetYUp:(id)sender {
+  (void)sender;
+  const auto stateIt = NativeMenuStates().find(window_);
+  if (stateIt != NativeMenuStates().end() && stateIt->second.onSetUpAxisRequested) {
+    stateIt->second.onSetUpAxisRequested(0);
+  }
+}
+
+- (IBAction)handleSetNegativeYUp:(id)sender {
+  (void)sender;
+  const auto stateIt = NativeMenuStates().find(window_);
+  if (stateIt != NativeMenuStates().end() && stateIt->second.onSetUpAxisRequested) {
+    stateIt->second.onSetUpAxisRequested(1);
+  }
+}
+
+- (IBAction)handleSetZUp:(id)sender {
+  (void)sender;
+  const auto stateIt = NativeMenuStates().find(window_);
+  if (stateIt != NativeMenuStates().end() && stateIt->second.onSetUpAxisRequested) {
+    stateIt->second.onSetUpAxisRequested(2);
+  }
+}
+
+- (IBAction)handleSetNegativeZUp:(id)sender {
+  (void)sender;
+  const auto stateIt = NativeMenuStates().find(window_);
+  if (stateIt != NativeMenuStates().end() && stateIt->second.onSetUpAxisRequested) {
+    stateIt->second.onSetUpAxisRequested(3);
+  }
+}
+
+- (BOOL)validateMenuItem:(NSMenuItem*)menuItem {
+  const auto stateIt = NativeMenuStates().find(window_);
+  if (stateIt == NativeMenuStates().end()) {
+    return YES;
+  }
+
+  if (
+    menuItem.action == @selector(handleSetYUp:) ||
+    menuItem.action == @selector(handleSetNegativeYUp:) ||
+    menuItem.action == @selector(handleSetZUp:) ||
+    menuItem.action == @selector(handleSetNegativeZUp:)) {
+    const int selectedIndex = stateIt->second.selectedUpAxisIndex ? stateIt->second.selectedUpAxisIndex() : 2;
+    int menuIndex = 2;
+    if (menuItem.action == @selector(handleSetYUp:)) {
+      menuIndex = 0;
+    } else if (menuItem.action == @selector(handleSetNegativeYUp:)) {
+      menuIndex = 1;
+    } else if (menuItem.action == @selector(handleSetZUp:)) {
+      menuIndex = 2;
+    } else if (menuItem.action == @selector(handleSetNegativeZUp:)) {
+      menuIndex = 3;
+    }
+    menuItem.state = selectedIndex == menuIndex ? NSControlStateValueOn : NSControlStateValueOff;
+  }
+
+  return YES;
+}
+
 @end
 
 namespace pointmod {
@@ -91,7 +157,9 @@ bool InstallNativeMenu(
   const std::function<void()>& onOpenRequested,
   const std::function<void()>& onSaveRequested,
   const std::function<void()>& onResetViewRequested,
-  const std::function<void()>& onTaskManagerRequested) {
+  const std::function<void()>& onTaskManagerRequested,
+  const std::function<void(int)>& onSetUpAxisRequested,
+  const std::function<int()>& selectedUpAxisIndex) {
   if (window == nullptr || NSApp == nil) {
     return false;
   }
@@ -129,12 +197,19 @@ bool InstallNativeMenu(
   [viewMenuItem setSubmenu:viewMenu];
   AddMenuItem(viewMenu, @"Reset View", @selector(handleResetView:), @"r", NSEventModifierFlagCommand, handler);
   AddMenuItem(viewMenu, @"Task Manager", @selector(handleTaskManager:), @"", 0, handler);
+  [viewMenu addItem:[NSMenuItem separatorItem]];
+  AddMenuItem(viewMenu, @"Y-up", @selector(handleSetYUp:), @"", 0, handler);
+  AddMenuItem(viewMenu, @"Negative Y-up", @selector(handleSetNegativeYUp:), @"", 0, handler);
+  AddMenuItem(viewMenu, @"Z-up", @selector(handleSetZUp:), @"", 0, handler);
+  AddMenuItem(viewMenu, @"Negative Z-up", @selector(handleSetNegativeZUp:), @"", 0, handler);
 
   NativeMenuState state;
   state.onOpenRequested = onOpenRequested;
   state.onSaveRequested = onSaveRequested;
   state.onResetViewRequested = onResetViewRequested;
   state.onTaskManagerRequested = onTaskManagerRequested;
+  state.onSetUpAxisRequested = onSetUpAxisRequested;
+  state.selectedUpAxisIndex = selectedUpAxisIndex;
   state.previousMainMenu = [NSApp mainMenu];
   state.handler = handler;
   NativeMenuStates()[window] = std::move(state);
@@ -166,7 +241,14 @@ void UninstallNativeMenu(GLFWwindow* window) {
 
 namespace pointmod {
 
-bool InstallNativeMenu(GLFWwindow*, const std::function<void()>&, const std::function<void()>&, const std::function<void()>&, const std::function<void()>&) {
+bool InstallNativeMenu(
+  GLFWwindow*,
+  const std::function<void()>&,
+  const std::function<void()>&,
+  const std::function<void()>&,
+  const std::function<void()>&,
+  const std::function<void(int)>&,
+  const std::function<int()>&) {
   return false;
 }
 

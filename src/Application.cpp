@@ -54,7 +54,6 @@ constexpr double kInteractionTuneIntervalSeconds = 0.2;
 constexpr std::size_t kSaveProgressUpdatePoints = 50'000;
 constexpr double kSaveProgressPresentIntervalSeconds = 1.0 / 30.0;
 constexpr std::size_t kDeletionWorkChunkPoints = 200'000;
-constexpr Vec3 kWorldUp = {0.0f, 0.0f, 1.0f};
 constexpr std::uint8_t kPointFlagIsolatedPreview = 1 << 0;
 constexpr std::uint8_t kPointFlagMarkedForDeletion = 1 << 1;
 
@@ -72,6 +71,34 @@ struct PointPickResult {
 
 Vec3 PointPosition(const PointVertex& point) {
   return {point.x, point.y, point.z};
+}
+
+const char* WorldUpAxisLabel(WorldUpAxis axis) {
+  switch (axis) {
+    case WorldUpAxis::kY:
+      return "Y-up";
+    case WorldUpAxis::kNegativeY:
+      return "Negative Y-up";
+    case WorldUpAxis::kZ:
+      return "Z-up";
+    case WorldUpAxis::kNegativeZ:
+      return "Negative Z-up";
+  }
+  return "Z-up";
+}
+
+int WorldUpAxisMenuIndex(WorldUpAxis axis) {
+  switch (axis) {
+    case WorldUpAxis::kY:
+      return 0;
+    case WorldUpAxis::kNegativeY:
+      return 1;
+    case WorldUpAxis::kZ:
+      return 2;
+    case WorldUpAxis::kNegativeZ:
+      return 3;
+  }
+  return 2;
 }
 
 float GetAxisComponent(const Vec3& value, int axisIndex) {
@@ -367,6 +394,7 @@ bool ProjectToScreen(
 
 CameraRay BuildCameraRay(
   const OrbitCamera& camera,
+  const Vec3& worldUp,
   float mouseX,
   float mouseY,
   float viewportWidth,
@@ -376,7 +404,7 @@ CameraRay BuildCameraRay(
   const float ndcY = viewportHeight > 0.0f ? 1.0f - mouseY / viewportHeight * 2.0f : 0.0f;
   const Vec3 eye = camera.Position();
   const Vec3 forward = Normalize(camera.Target() - eye);
-  Vec3 right = Normalize(Cross(forward, kWorldUp));
+  Vec3 right = Normalize(Cross(forward, worldUp));
   if (Length(right) <= 0.0f) {
     right = {1.0f, 0.0f, 0.0f};
   }
@@ -391,10 +419,10 @@ CameraRay BuildCameraRay(
   };
 }
 
-void BuildCameraBasis(const OrbitCamera& camera, Vec3& forward, Vec3& right, Vec3& up) {
+void BuildCameraBasis(const OrbitCamera& camera, const Vec3& worldUp, Vec3& forward, Vec3& right, Vec3& up) {
   const Vec3 eye = camera.Position();
   forward = Normalize(camera.Target() - eye);
-  right = Normalize(Cross(forward, kWorldUp));
+  right = Normalize(Cross(forward, worldUp));
   if (Length(right) <= 0.0f) {
     right = {1.0f, 0.0f, 0.0f};
   }
@@ -416,19 +444,31 @@ bool IntersectRayPlane(const CameraRay& ray, const Vec3& planeOrigin, const Vec3
   return true;
 }
 
-Vec3 BuildPlaneNormalForAxisDrag(const Vec3& axis, const Vec3& eyeToOrigin) {
+Vec3 BuildPlaneNormalForAxisDrag(const Vec3& axis, const Vec3& eyeToOrigin, const Vec3& worldUp) {
   Vec3 planeNormal = Cross(Cross(axis, eyeToOrigin), axis);
   if (Length(planeNormal) <= 0.00001f) {
-    planeNormal = Cross(Cross(axis, kWorldUp), axis);
+    planeNormal = Cross(Cross(axis, worldUp), axis);
+  }
+  if (Length(planeNormal) <= 0.00001f) {
+    planeNormal = Cross(Cross(axis, Vec3{1.0f, 0.0f, 0.0f}), axis);
   }
   if (Length(planeNormal) <= 0.00001f) {
     planeNormal = Cross(Cross(axis, Vec3{0.0f, 1.0f, 0.0f}), axis);
   }
+  if (Length(planeNormal) <= 0.00001f) {
+    planeNormal = Cross(Cross(axis, Vec3{0.0f, 0.0f, 1.0f}), axis);
+  }
   return Normalize(planeNormal);
 }
 
-void BuildPlaneBasis(const Vec3& normal, Vec3& tangent, Vec3& bitangent) {
-  tangent = Normalize(Cross(std::abs(normal.z) < 0.95f ? kWorldUp : Vec3{0.0f, 1.0f, 0.0f}, normal));
+void BuildPlaneBasis(const Vec3& normal, const Vec3& worldUp, Vec3& tangent, Vec3& bitangent) {
+  tangent = Normalize(Cross(std::abs(Dot(normal, worldUp)) < 0.95f ? worldUp : Vec3{1.0f, 0.0f, 0.0f}, normal));
+  if (Length(tangent) <= 0.00001f) {
+    tangent = Normalize(Cross(Vec3{0.0f, 1.0f, 0.0f}, normal));
+  }
+  if (Length(tangent) <= 0.00001f) {
+    tangent = Normalize(Cross(Vec3{0.0f, 0.0f, 1.0f}, normal));
+  }
   if (Length(tangent) <= 0.00001f) {
     tangent = {1.0f, 0.0f, 0.0f};
   }
@@ -549,11 +589,11 @@ bool NearlyEqual(const Vec3& a, const Vec3& b, float epsilon = 0.0001f) {
     NearlyEqual(a.z, b.z, epsilon);
 }
 
-Vec3 BuildScaleHandleDirection(const OrbitCamera& camera) {
+Vec3 BuildScaleHandleDirection(const OrbitCamera& camera, const Vec3& worldUp) {
   Vec3 forward;
   Vec3 right;
   Vec3 up;
-  BuildCameraBasis(camera, forward, right, up);
+  BuildCameraBasis(camera, worldUp, forward, right, up);
 
   Vec3 direction = Normalize(right + up);
   if (Length(direction) <= 0.0f) {
@@ -1025,7 +1065,26 @@ void Application::InitializeWindow() {
     [this]() { StartOpenDialog(); },
     [this]() { StartSaveDialog(); },
     [this]() { ResetView(); },
-    [this]() { taskManagerOpen_ = true; });
+    [this]() { taskManagerOpen_ = true; },
+    [this](int axisIndex) {
+      switch (axisIndex) {
+        case 0:
+          SetWorldUpAxis(WorldUpAxis::kY);
+          break;
+        case 1:
+          SetWorldUpAxis(WorldUpAxis::kNegativeY);
+          break;
+        case 2:
+          SetWorldUpAxis(WorldUpAxis::kZ);
+          break;
+        case 3:
+          SetWorldUpAxis(WorldUpAxis::kNegativeZ);
+          break;
+        default:
+          break;
+      }
+    },
+    [this]() { return WorldUpAxisMenuIndex(worldUpAxis_); });
   useImGuiMenuBar_ = !nativeMenuInstalled;
 }
 
@@ -1124,6 +1183,19 @@ float Application::RenderMenuBar() {
       ImGui::MenuItem(hideBoxesVisible_ ? "Hide boxes" : "Show boxes", nullptr, &hideBoxesVisible_, hasHideBoxes);
       if (ImGui::MenuItem("Task manager", nullptr, taskManagerOpen_)) {
         taskManagerOpen_ = !taskManagerOpen_;
+      }
+      ImGui::Separator();
+      if (ImGui::MenuItem("Y-up", nullptr, worldUpAxis_ == WorldUpAxis::kY)) {
+        SetWorldUpAxis(WorldUpAxis::kY);
+      }
+      if (ImGui::MenuItem("Negative Y-up", nullptr, worldUpAxis_ == WorldUpAxis::kNegativeY)) {
+        SetWorldUpAxis(WorldUpAxis::kNegativeY);
+      }
+      if (ImGui::MenuItem("Z-up", nullptr, worldUpAxis_ == WorldUpAxis::kZ)) {
+        SetWorldUpAxis(WorldUpAxis::kZ);
+      }
+      if (ImGui::MenuItem("Negative Z-up", nullptr, worldUpAxis_ == WorldUpAxis::kNegativeZ)) {
+        SetWorldUpAxis(WorldUpAxis::kNegativeZ);
       }
       ImGui::EndMenu();
     }
@@ -1283,6 +1355,7 @@ void Application::RenderUi() {
     }
 
     ImGui::SliderFloat("Point size", &pointSize_, 1.0f, 8.0f, "%.1f px");
+    ImGui::Text("Up axis: %s", WorldUpAxisLabel(worldUpAxis_));
     ImGui::Text("Coloring: %s", PointColorModeLabel(pointColorMode_));
     if (ImGui::RadioButton("Source color", pointColorMode_ == PointColorMode::kSource)) {
       pointColorMode_ = PointColorMode::kSource;
@@ -1747,6 +1820,7 @@ void Application::UpdateHideBoxGizmo() {
   const float gizmoSize = (std::max)(currentCloud_.bounds.Radius() * 0.18f, distanceToBox * 0.20f);
   const float rotateRadius = gizmoSize * kGizmoRotateRadiusFactor;
   const Mat4 boxRotation = EulerRotationXYZ(selectedBox.rotationDegrees);
+  const Vec3 worldUp = camera_.WorldUp();
   Vec3 localAxes[3] = {
     Normalize(TransformVector(boxRotation, UnitAxis(0))),
     Normalize(TransformVector(boxRotation, UnitAxis(1))),
@@ -1791,7 +1865,7 @@ void Application::UpdateHideBoxGizmo() {
       for (int axisIndex = 0; axisIndex < 3; ++axisIndex) {
         Vec3 tangent;
         Vec3 bitangent;
-        BuildPlaneBasis(localAxes[axisIndex], tangent, bitangent);
+        BuildPlaneBasis(localAxes[axisIndex], worldUp, tangent, bitangent);
 
         for (int segmentIndex = 0; segmentIndex < kGizmoCircleSegments; ++segmentIndex) {
           const float angleA = static_cast<float>(segmentIndex) / static_cast<float>(kGizmoCircleSegments) * 6.28318530718f;
@@ -1833,6 +1907,7 @@ void Application::UpdateHideBoxGizmo() {
 
     const CameraRay ray = BuildCameraRay(
       camera_,
+      worldUp,
       mousePosition.x - viewportOrigin.x,
       mousePosition.y - viewportOrigin.y,
       viewportSize.x,
@@ -1849,17 +1924,17 @@ void Application::UpdateHideBoxGizmo() {
         } else {
           Vec3 tangent;
           Vec3 bitangent;
-          BuildPlaneBasis(axisWorld, tangent, bitangent);
+          BuildPlaneBasis(axisWorld, worldUp, tangent, bitangent);
           hideBoxGizmoDrag_.startPlaneVector = tangent;
         }
       } else {
         Vec3 tangent;
         Vec3 bitangent;
-        BuildPlaneBasis(axisWorld, tangent, bitangent);
+        BuildPlaneBasis(axisWorld, worldUp, tangent, bitangent);
         hideBoxGizmoDrag_.startPlaneVector = tangent;
       }
     } else {
-      const Vec3 planeNormal = BuildPlaneNormalForAxisDrag(axisWorld, camera_.Position() - selectedBox.center);
+      const Vec3 planeNormal = BuildPlaneNormalForAxisDrag(axisWorld, camera_.Position() - selectedBox.center, worldUp);
       Vec3 hitPoint;
       if (IntersectRayPlane(ray, selectedBox.center, planeNormal, hitPoint)) {
         hideBoxGizmoDrag_.startAxisParameter = Dot(hitPoint - selectedBox.center, axisWorld);
@@ -1881,6 +1956,7 @@ void Application::UpdateHideBoxGizmo() {
       if (ImGui::IsMouseDown(0)) {
         const CameraRay ray = BuildCameraRay(
           camera_,
+          worldUp,
           mousePosition.x - viewportOrigin.x,
           mousePosition.y - viewportOrigin.y,
           viewportSize.x,
@@ -1905,7 +1981,7 @@ void Application::UpdateHideBoxGizmo() {
             }
           }
         } else {
-          const Vec3 planeNormal = BuildPlaneNormalForAxisDrag(axisWorld, camera_.Position() - hideBoxGizmoDrag_.startCenter);
+          const Vec3 planeNormal = BuildPlaneNormalForAxisDrag(axisWorld, camera_.Position() - hideBoxGizmoDrag_.startCenter, worldUp);
           Vec3 hitPoint;
           if (IntersectRayPlane(ray, hideBoxGizmoDrag_.startCenter, planeNormal, hitPoint)) {
             const float axisParameter = Dot(hitPoint - hideBoxGizmoDrag_.startCenter, axisWorld);
@@ -1994,7 +2070,7 @@ void Application::UpdateHideBoxGizmo() {
     for (int axisIndex = 0; axisIndex < 3; ++axisIndex) {
       Vec3 tangent;
       Vec3 bitangent;
-      BuildPlaneBasis(displayAxes[axisIndex], tangent, bitangent);
+      BuildPlaneBasis(displayAxes[axisIndex], worldUp, tangent, bitangent);
 
       const bool highlighted = hotAxisIndex == axisIndex;
       const ImU32 color = AxisColor(axisIndex, highlighted);
@@ -2067,7 +2143,7 @@ void Application::UpdatePointSelectionInteraction() {
     Vec3 forward;
     Vec3 right;
     Vec3 up;
-    BuildCameraBasis(camera_, forward, right, up);
+    BuildCameraBasis(camera_, camera_.WorldUp(), forward, right, up);
     const Vec3 eye = camera_.Position();
     float bestDistanceSquared = FLT_MAX;
     float bestCameraDistance = FLT_MAX;
@@ -2118,7 +2194,7 @@ void Application::UpdatePointSelectionInteraction() {
 
   auto drawScaleHandles = [&]() {
     const Mat4 viewProjection = camera_.ViewProjection(viewportSize.x / viewportSize.y);
-    const Vec3 handleDirection = BuildScaleHandleDirection(camera_);
+    const Vec3 handleDirection = BuildScaleHandleDirection(camera_, camera_.WorldUp());
     ImDrawList* drawList = ImGui::GetBackgroundDrawList();
     for (std::size_t selectionIndex = 0; selectionIndex < pointSelections_.size(); ++selectionIndex) {
       const PointSelection& selection = pointSelections_[selectionIndex];
@@ -2224,6 +2300,7 @@ void Application::UpdatePointSelectionInteraction() {
     const Vec3 center = pointPositionAt(selection.pointIndex);
     const CameraRay ray = BuildCameraRay(
       camera_,
+      camera_.WorldUp(),
       mousePosition.x - viewportOrigin.x,
       mousePosition.y - viewportOrigin.y,
       viewportSize.x,
@@ -2250,7 +2327,7 @@ void Application::UpdatePointSelectionInteraction() {
     return;
   }
 
-  const Vec3 handleDirection = BuildScaleHandleDirection(camera_);
+  const Vec3 handleDirection = BuildScaleHandleDirection(camera_, camera_.WorldUp());
   float bestHandleDistanceSquared = kPointScaleHandleRadiusPixels * kPointScaleHandleRadiusPixels;
 
   for (std::size_t selectionIndex = 0; selectionIndex < pointSelections_.size(); ++selectionIndex) {
@@ -3744,6 +3821,26 @@ void Application::ResetView() {
   cameraFramed_ = true;
   cameraTouched_ = false;
   statusMessage_ = "View reset.";
+}
+
+void Application::SetWorldUpAxis(WorldUpAxis axis) {
+  if (worldUpAxis_ == axis) {
+    return;
+  }
+
+  worldUpAxis_ = axis;
+  camera_.SetWorldUpAxis(axis);
+  camera_.ResetOrientation();
+
+  if (currentCloud_.bounds.IsValid()) {
+    camera_.Frame(currentCloud_.bounds);
+    cameraFramed_ = true;
+    cameraTouched_ = false;
+    statusMessage_ = std::string("Up axis set to ") + WorldUpAxisLabel(axis) + ". View reset.";
+    return;
+  }
+
+  statusMessage_ = std::string("Up axis set to ") + WorldUpAxisLabel(axis) + ".";
 }
 
 void Application::OpenPointCloud(const std::filesystem::path& path) {

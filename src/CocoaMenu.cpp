@@ -29,19 +29,41 @@ constexpr UINT_PTR kSaveMenuCommandId = 1002;
 constexpr UINT_PTR kResetViewMenuCommandId = 1003;
 constexpr UINT_PTR kTaskManagerMenuCommandId = 1004;
 constexpr UINT_PTR kQuitMenuCommandId = 1005;
+constexpr UINT_PTR kYUpMenuCommandId = 1006;
+constexpr UINT_PTR kNegativeYUpMenuCommandId = 1007;
+constexpr UINT_PTR kZUpMenuCommandId = 1008;
+constexpr UINT_PTR kNegativeZUpMenuCommandId = 1009;
 
 struct NativeMenuState {
   std::function<void()> onOpenRequested;
   std::function<void()> onSaveRequested;
   std::function<void()> onResetViewRequested;
   std::function<void()> onTaskManagerRequested;
+  std::function<void(int)> onSetUpAxisRequested;
+  std::function<int()> selectedUpAxisIndex;
   WNDPROC previousWindowProc = nullptr;
   HMENU menuBar = nullptr;
+  HMENU viewMenu = nullptr;
 };
 
 std::unordered_map<HWND, NativeMenuState>& NativeMenuStates() {
   static std::unordered_map<HWND, NativeMenuState> states;
   return states;
+}
+
+UINT_PTR MenuCommandIdForUpAxisIndex(int index) {
+  switch (index) {
+    case 0:
+      return kYUpMenuCommandId;
+    case 1:
+      return kNegativeYUpMenuCommandId;
+    case 2:
+      return kZUpMenuCommandId;
+    case 3:
+      return kNegativeZUpMenuCommandId;
+    default:
+      return kZUpMenuCommandId;
+  }
 }
 
 LRESULT CALLBACK NativeMenuWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
@@ -69,6 +91,33 @@ LRESULT CALLBACK NativeMenuWindowProc(HWND hwnd, UINT message, WPARAM wParam, LP
           stateIt->second.onTaskManagerRequested();
         }
         return 0;
+      case kYUpMenuCommandId:
+      case kNegativeYUpMenuCommandId:
+      case kZUpMenuCommandId:
+      case kNegativeZUpMenuCommandId:
+        if (stateIt->second.onSetUpAxisRequested) {
+          int menuIndex = 2;
+          if (LOWORD(wParam) == kYUpMenuCommandId) {
+            menuIndex = 0;
+          } else if (LOWORD(wParam) == kNegativeYUpMenuCommandId) {
+            menuIndex = 1;
+          } else if (LOWORD(wParam) == kZUpMenuCommandId) {
+            menuIndex = 2;
+          } else if (LOWORD(wParam) == kNegativeZUpMenuCommandId) {
+            menuIndex = 3;
+          }
+          stateIt->second.onSetUpAxisRequested(menuIndex);
+        }
+        if (stateIt->second.viewMenu != nullptr) {
+          CheckMenuRadioItem(
+            stateIt->second.viewMenu,
+            kYUpMenuCommandId,
+            kNegativeZUpMenuCommandId,
+            MenuCommandIdForUpAxisIndex(
+              stateIt->second.selectedUpAxisIndex ? stateIt->second.selectedUpAxisIndex() : 2),
+            MF_BYCOMMAND);
+        }
+        return 0;
       case kQuitMenuCommandId:
         PostMessageW(hwnd, WM_CLOSE, 0, 0);
         return 0;
@@ -91,7 +140,9 @@ bool InstallNativeMenu(
   const std::function<void()>& onOpenRequested,
   const std::function<void()>& onSaveRequested,
   const std::function<void()>& onResetViewRequested,
-  const std::function<void()>& onTaskManagerRequested) {
+  const std::function<void()>& onTaskManagerRequested,
+  const std::function<void(int)>& onSetUpAxisRequested,
+  const std::function<int()>& selectedUpAxisIndex) {
   if (window == nullptr) {
     return false;
   }
@@ -125,6 +176,17 @@ bool InstallNativeMenu(
   AppendMenuW(fileMenu, MF_STRING, kQuitMenuCommandId, L"E&xit");
   AppendMenuW(viewMenu, MF_STRING, kResetViewMenuCommandId, L"&Reset view");
   AppendMenuW(viewMenu, MF_STRING, kTaskManagerMenuCommandId, L"&Task manager");
+  AppendMenuW(viewMenu, MF_SEPARATOR, 0, nullptr);
+  AppendMenuW(viewMenu, MF_STRING, kYUpMenuCommandId, L"&Y-up");
+  AppendMenuW(viewMenu, MF_STRING, kNegativeYUpMenuCommandId, L"&Negative Y-up");
+  AppendMenuW(viewMenu, MF_STRING, kZUpMenuCommandId, L"&Z-up");
+  AppendMenuW(viewMenu, MF_STRING, kNegativeZUpMenuCommandId, L"&Negative Z-up");
+  CheckMenuRadioItem(
+    viewMenu,
+    kYUpMenuCommandId,
+    kNegativeZUpMenuCommandId,
+    MenuCommandIdForUpAxisIndex(selectedUpAxisIndex ? selectedUpAxisIndex() : 2),
+    MF_BYCOMMAND);
   AppendMenuW(menuBar, MF_POPUP, reinterpret_cast<UINT_PTR>(fileMenu), L"&File");
   AppendMenuW(menuBar, MF_POPUP, reinterpret_cast<UINT_PTR>(viewMenu), L"&View");
 
@@ -138,7 +200,10 @@ bool InstallNativeMenu(
   state.onSaveRequested = onSaveRequested;
   state.onResetViewRequested = onResetViewRequested;
   state.onTaskManagerRequested = onTaskManagerRequested;
+  state.onSetUpAxisRequested = onSetUpAxisRequested;
+  state.selectedUpAxisIndex = selectedUpAxisIndex;
   state.menuBar = menuBar;
+  state.viewMenu = viewMenu;
   state.previousWindowProc = reinterpret_cast<WNDPROC>(
     SetWindowLongPtrW(hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(NativeMenuWindowProc)));
   NativeMenuStates()[hwnd] = std::move(state);
@@ -176,7 +241,14 @@ void UninstallNativeMenu(GLFWwindow* window) {
 
 #else
 
-bool InstallNativeMenu(GLFWwindow*, const std::function<void()>&, const std::function<void()>&, const std::function<void()>&, const std::function<void()>&) {
+bool InstallNativeMenu(
+  GLFWwindow*,
+  const std::function<void()>&,
+  const std::function<void()>&,
+  const std::function<void()>&,
+  const std::function<void()>&,
+  const std::function<void(int)>&,
+  const std::function<int()>&) {
   return false;
 }
 
