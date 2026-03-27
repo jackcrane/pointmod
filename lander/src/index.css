@@ -116,3 +116,15 @@ body {
 .cta:hover {
   background-color: hsl(0, 0%, 100%);
 }
+
+.content {
+  width: 80%;
+  margin: 0 auto;
+  margin-top: -50px;
+  display: flex;
+}
+
+.content video {
+  width: 100%;
+  height: 100%;
+}

@@ -1159,8 +1159,7 @@ void Application::RenderUi() {
 
   ImGuiWindowFlags flags =
     ImGuiWindowFlags_NoMove |
-    ImGuiWindowFlags_NoResize |
-    ImGuiWindowFlags_NoCollapse;
+    ImGuiWindowFlags_NoResize;
 
   if (ImGui::Begin("Viewer", nullptr, flags)) {
     if (ImGui::Button("Open...")) {
