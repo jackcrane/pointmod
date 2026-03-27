@@ -2,6 +2,7 @@
 
 #include "PlyAsciiLoader.hpp"
 
+#include <cstdint>
 #include <deque>
 #include <mutex>
 #include <optional>
@@ -28,6 +29,7 @@ class AsyncPointCloudLoader {
   [[nodiscard]] State Snapshot() const;
   std::vector<PointCloudChunk> TakePendingChunks();
   std::optional<PointCloudData> TakeCompleted();
+  [[nodiscard]] std::uint64_t ApproximateResidentBytes() const;
 
  private:
   PlyLoadOptions options_;

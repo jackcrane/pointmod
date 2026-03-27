@@ -96,4 +96,18 @@ std::optional<PointCloudData> AsyncPointCloudLoader::TakeCompleted() {
   return result;
 }
 
+std::uint64_t AsyncPointCloudLoader::ApproximateResidentBytes() const {
+  std::scoped_lock lock(mutex_);
+
+  std::uint64_t bytes = 0;
+  for (const PointCloudChunk& chunk : pendingChunks_) {
+    bytes += static_cast<std::uint64_t>(chunk.points.capacity()) * sizeof(PointVertex);
+  }
+  if (completed_) {
+    bytes += static_cast<std::uint64_t>(completed_->points.capacity()) * sizeof(PointVertex);
+  }
+  bytes += static_cast<std::uint64_t>(state_.message.capacity());
+  return bytes;
+}
+
 }  // namespace pointmod

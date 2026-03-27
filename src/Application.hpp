@@ -2,6 +2,7 @@
 
 #include "AsyncPointCloudLoader.hpp"
 #include "OrbitCamera.hpp"
+#include "PerformanceTracker.hpp"
 #include "PointCloudRenderer.hpp"
 
 #include <imgui.h>
@@ -144,9 +145,11 @@ class Application {
   void EndImGuiFrame();
   float RenderMenuBar();
   void RenderUi();
+  void RenderTaskManagerWindow();
   void RenderSaveProgressOverlay();
   void RenderSelectIsolatedDialog();
   void RenderScene();
+  void UpdateTaskManagerMemoryStats();
   void UpdateHideBoxGizmo();
   void UpdatePointSelectionInteraction();
   void UpdateCloudLoading();
@@ -173,6 +176,11 @@ class Application {
   void ClearIsolatedSelectionPreview();
   void RebuildPointCloudRenderer();
   std::vector<SelectionSphere> BuildSelectionSpheres() const;
+  [[nodiscard]] std::uint64_t EstimatePointCloudMemoryBytes() const;
+  [[nodiscard]] std::uint64_t EstimateHideBoxMemoryBytes() const;
+  [[nodiscard]] std::uint64_t EstimatePointSelectionMemoryBytes() const;
+  [[nodiscard]] std::uint64_t EstimateDeletionWorkflowMemoryBytes() const;
+  [[nodiscard]] std::uint64_t EstimateIsolatedSelectionMemoryBytes();
   void BeginDeletionMarking();
   void BeginHideBoxDeletionMarking(int hideBoxIndex);
   void BeginFreeformDeletionMarking(
@@ -298,7 +306,9 @@ class Application {
   IsolatedSearchWorkerState isolatedSearchWorkerState_;
   std::jthread isolatedSearchWorker_;
   bool useImGuiMenuBar_ = false;
+  bool taskManagerOpen_ = false;
   RenderDetail activeRenderDetail_ = RenderDetail::kFull;
+  PerformanceTracker performanceTracker_;
   bool glfwInitialized_ = false;
   bool imguiInitialized_ = false;
 };

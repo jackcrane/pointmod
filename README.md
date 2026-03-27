@@ -12,6 +12,7 @@ Current scope:
 - Chunked GPU uploads with adaptive full/balanced/interaction detail paths to keep giant clouds responsive.
 - Orbit/pan/zoom camera with a simple OpenGL point renderer.
 - Blue hide boxes that mask sampled points inside oriented box volumes, with per-box move/rotate/scale controls in the sidebar.
+- A `View > Task Manager` window that attributes retained memory and frame-time contribution by subsystem, with sortable columns.
 
 Build on macOS/Linux:
 

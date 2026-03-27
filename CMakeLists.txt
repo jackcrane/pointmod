@@ -112,6 +112,7 @@ add_executable(pointmod
   src/AsyncPointCloudLoader.cpp
   src/OpenGL.cpp
   src/OrbitCamera.cpp
+  src/PerformanceTracker.cpp
   src/PointCloud.cpp
   src/PlyAsciiLoader.cpp
   src/PointCloudRenderer.cpp

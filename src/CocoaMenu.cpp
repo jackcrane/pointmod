@@ -27,12 +27,14 @@ namespace {
 constexpr UINT_PTR kOpenMenuCommandId = 1001;
 constexpr UINT_PTR kSaveMenuCommandId = 1002;
 constexpr UINT_PTR kResetViewMenuCommandId = 1003;
-constexpr UINT_PTR kQuitMenuCommandId = 1004;
+constexpr UINT_PTR kTaskManagerMenuCommandId = 1004;
+constexpr UINT_PTR kQuitMenuCommandId = 1005;
 
 struct NativeMenuState {
   std::function<void()> onOpenRequested;
   std::function<void()> onSaveRequested;
   std::function<void()> onResetViewRequested;
+  std::function<void()> onTaskManagerRequested;
   WNDPROC previousWindowProc = nullptr;
   HMENU menuBar = nullptr;
 };
@@ -62,6 +64,11 @@ LRESULT CALLBACK NativeMenuWindowProc(HWND hwnd, UINT message, WPARAM wParam, LP
           stateIt->second.onResetViewRequested();
         }
         return 0;
+      case kTaskManagerMenuCommandId:
+        if (stateIt->second.onTaskManagerRequested) {
+          stateIt->second.onTaskManagerRequested();
+        }
+        return 0;
       case kQuitMenuCommandId:
         PostMessageW(hwnd, WM_CLOSE, 0, 0);
         return 0;
@@ -83,7 +90,8 @@ bool InstallNativeMenu(
   GLFWwindow* window,
   const std::function<void()>& onOpenRequested,
   const std::function<void()>& onSaveRequested,
-  const std::function<void()>& onResetViewRequested) {
+  const std::function<void()>& onResetViewRequested,
+  const std::function<void()>& onTaskManagerRequested) {
   if (window == nullptr) {
     return false;
   }
@@ -116,6 +124,7 @@ bool InstallNativeMenu(
   AppendMenuW(fileMenu, MF_SEPARATOR, 0, nullptr);
   AppendMenuW(fileMenu, MF_STRING, kQuitMenuCommandId, L"E&xit");
   AppendMenuW(viewMenu, MF_STRING, kResetViewMenuCommandId, L"&Reset view");
+  AppendMenuW(viewMenu, MF_STRING, kTaskManagerMenuCommandId, L"&Task manager");
   AppendMenuW(menuBar, MF_POPUP, reinterpret_cast<UINT_PTR>(fileMenu), L"&File");
   AppendMenuW(menuBar, MF_POPUP, reinterpret_cast<UINT_PTR>(viewMenu), L"&View");
 
@@ -128,6 +137,7 @@ bool InstallNativeMenu(
   state.onOpenRequested = onOpenRequested;
   state.onSaveRequested = onSaveRequested;
   state.onResetViewRequested = onResetViewRequested;
+  state.onTaskManagerRequested = onTaskManagerRequested;
   state.menuBar = menuBar;
   state.previousWindowProc = reinterpret_cast<WNDPROC>(
     SetWindowLongPtrW(hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(NativeMenuWindowProc)));
@@ -166,7 +176,7 @@ void UninstallNativeMenu(GLFWwindow* window) {
 
 #else
 
-bool InstallNativeMenu(GLFWwindow*, const std::function<void()>&, const std::function<void()>&, const std::function<void()>&) {
+bool InstallNativeMenu(GLFWwindow*, const std::function<void()>&, const std::function<void()>&, const std::function<void()>&, const std::function<void()>&) {
   return false;
 }
 

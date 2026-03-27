@@ -12,6 +12,7 @@ struct NativeMenuState {
   std::function<void()> onOpenRequested;
   std::function<void()> onSaveRequested;
   std::function<void()> onResetViewRequested;
+  std::function<void()> onTaskManagerRequested;
   NSMenu* previousMainMenu = nil;
   id handler = nil;
 };
@@ -44,6 +45,7 @@ NSMenuItem* AddMenuItem(
 - (IBAction)handleOpen:(id)sender;
 - (IBAction)handleSave:(id)sender;
 - (IBAction)handleResetView:(id)sender;
+- (IBAction)handleTaskManager:(id)sender;
 @end
 
 @implementation PointmodMenuHandler
@@ -72,6 +74,14 @@ NSMenuItem* AddMenuItem(
   }
 }
 
+- (IBAction)handleTaskManager:(id)sender {
+  (void)sender;
+  const auto stateIt = NativeMenuStates().find(window_);
+  if (stateIt != NativeMenuStates().end() && stateIt->second.onTaskManagerRequested) {
+    stateIt->second.onTaskManagerRequested();
+  }
+}
+
 @end
 
 namespace pointmod {
@@ -80,7 +90,8 @@ bool InstallNativeMenu(
   GLFWwindow* window,
   const std::function<void()>& onOpenRequested,
   const std::function<void()>& onSaveRequested,
-  const std::function<void()>& onResetViewRequested) {
+  const std::function<void()>& onResetViewRequested,
+  const std::function<void()>& onTaskManagerRequested) {
   if (window == nullptr || NSApp == nil) {
     return false;
   }
@@ -117,11 +128,13 @@ bool InstallNativeMenu(
   NSMenu* viewMenu = [[NSMenu alloc] initWithTitle:@"View"];
   [viewMenuItem setSubmenu:viewMenu];
   AddMenuItem(viewMenu, @"Reset View", @selector(handleResetView:), @"r", NSEventModifierFlagCommand, handler);
+  AddMenuItem(viewMenu, @"Task Manager", @selector(handleTaskManager:), @"", 0, handler);
 
   NativeMenuState state;
   state.onOpenRequested = onOpenRequested;
   state.onSaveRequested = onSaveRequested;
   state.onResetViewRequested = onResetViewRequested;
+  state.onTaskManagerRequested = onTaskManagerRequested;
   state.previousMainMenu = [NSApp mainMenu];
   state.handler = handler;
   NativeMenuStates()[window] = std::move(state);
@@ -153,7 +166,7 @@ void UninstallNativeMenu(GLFWwindow* window) {
 
 namespace pointmod {
 
-bool InstallNativeMenu(GLFWwindow*, const std::function<void()>&, const std::function<void()>&, const std::function<void()>&) {
+bool InstallNativeMenu(GLFWwindow*, const std::function<void()>&, const std::function<void()>&, const std::function<void()>&, const std::function<void()>&) {
   return false;
 }
 

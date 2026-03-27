@@ -13,6 +13,8 @@
 #include <algorithm>
 #include <bit>
 #include <cfloat>
+#include <cstring>
+#include <cstdio>
 #include <filesystem>
 #include <limits>
 #include <stdexcept>
@@ -967,6 +969,81 @@ std::filesystem::path NormalizePathForComparison(const std::filesystem::path& pa
   return absolutePath.lexically_normal();
 }
 
+template <typename T>
+std::uint64_t CapacityBytes(const std::vector<T>& values) {
+  return static_cast<std::uint64_t>(values.capacity()) * sizeof(T);
+}
+
+std::string FormatMemoryBytes(std::uint64_t bytes) {
+  static constexpr const char* kUnits[] = {"B", "KiB", "MiB", "GiB", "TiB"};
+  static constexpr std::size_t kUnitCount = sizeof(kUnits) / sizeof(kUnits[0]);
+
+  double scaled = static_cast<double>(bytes);
+  std::size_t unitIndex = 0;
+  while (scaled >= 1024.0 && unitIndex + 1 < kUnitCount) {
+    scaled /= 1024.0;
+    ++unitIndex;
+  }
+
+  char buffer[64];
+  std::snprintf(buffer, sizeof(buffer), "%.2f %s", scaled, kUnits[unitIndex]);
+  return buffer;
+}
+
+enum TaskManagerColumn {
+  kTaskManagerColumnName = 0,
+  kTaskManagerColumnMemoryPercent,
+  kTaskManagerColumnFramePercent,
+  kTaskManagerColumnMemoryBytes,
+  kTaskManagerColumnFrameMs,
+};
+
+void SortTaskManagerRows(std::vector<PerformanceTracker::TaskRow>& rows, const ImGuiTableSortSpecs* sortSpecs) {
+  if (sortSpecs == nullptr || sortSpecs->SpecsCount == 0) {
+    std::sort(rows.begin(), rows.end(), [](const PerformanceTracker::TaskRow& left, const PerformanceTracker::TaskRow& right) {
+      return left.frameContributionPercent > right.frameContributionPercent;
+    });
+    return;
+  }
+
+  const ImGuiTableColumnSortSpecs& primarySort = sortSpecs->Specs[0];
+  const bool ascending = primarySort.SortDirection == ImGuiSortDirection_Ascending;
+  std::sort(rows.begin(), rows.end(), [&](const PerformanceTracker::TaskRow& left, const PerformanceTracker::TaskRow& right) {
+    auto compareValue = [&](const auto& leftValue, const auto& rightValue) {
+      if (leftValue == rightValue) {
+        return 0;
+      }
+      return leftValue < rightValue ? -1 : 1;
+    };
+
+    int comparison = 0;
+    switch (primarySort.ColumnIndex) {
+      case kTaskManagerColumnName:
+        comparison = std::strcmp(left.label, right.label);
+        break;
+      case kTaskManagerColumnMemoryPercent:
+        comparison = compareValue(left.memoryPercent, right.memoryPercent);
+        break;
+      case kTaskManagerColumnFramePercent:
+        comparison = compareValue(left.frameContributionPercent, right.frameContributionPercent);
+        break;
+      case kTaskManagerColumnMemoryBytes:
+        comparison = compareValue(left.memoryBytes, right.memoryBytes);
+        break;
+      case kTaskManagerColumnFrameMs:
+        comparison = compareValue(left.smoothedFrameMs, right.smoothedFrameMs);
+        break;
+      default:
+        break;
+    }
+
+    if (comparison == 0) {
+      comparison = std::strcmp(left.label, right.label);
+    }
+    return ascending ? comparison < 0 : comparison > 0;
+  });
+}
+
 }  // namespace
 
 std::size_t Application::DeletionGridKeyHash::operator()(const DeletionGridKey& key) const {
@@ -990,20 +1067,53 @@ int Application::Run() {
     renderer_.Initialize();
 
     while (!glfwWindowShouldClose(window_)) {
-      glfwPollEvents();
-      UpdateCloudLoading();
+      performanceTracker_.BeginFrame();
+      {
+        auto task = performanceTracker_.Measure(PerformanceTracker::TaskId::kEventLoop);
+        glfwPollEvents();
+      }
+      {
+        auto task = performanceTracker_.Measure(PerformanceTracker::TaskId::kPointCloud);
+        UpdateCloudLoading();
+      }
+      UpdateTaskManagerMemoryStats();
 
       BeginImGuiFrame();
-      RenderUi();
-      UpdateHideBoxGizmo();
-      UpdatePointSelectionInteraction();
-      HandleCameraInput();
-      HandleDeletionInput();
-      UpdateDeletionWorkflow();
-      UpdateIsolatedSelectionWorkflow();
-      UpdateFrameStats();
-      RenderScene();
-      EndImGuiFrame();
+      {
+        auto task = performanceTracker_.Measure(PerformanceTracker::TaskId::kUi);
+        RenderUi();
+      }
+      {
+        auto task = performanceTracker_.Measure(PerformanceTracker::TaskId::kHideBoxTools);
+        UpdateHideBoxGizmo();
+      }
+      {
+        auto task = performanceTracker_.Measure(PerformanceTracker::TaskId::kPointSelection);
+        UpdatePointSelectionInteraction();
+      }
+      {
+        auto task = performanceTracker_.Measure(PerformanceTracker::TaskId::kCamera);
+        HandleCameraInput();
+      }
+      {
+        auto task = performanceTracker_.Measure(PerformanceTracker::TaskId::kDeletionWorkflow);
+        HandleDeletionInput();
+        UpdateDeletionWorkflow();
+      }
+      {
+        auto task = performanceTracker_.Measure(PerformanceTracker::TaskId::kIsolatedSelection);
+        UpdateIsolatedSelectionWorkflow();
+      }
+      {
+        auto task = performanceTracker_.Measure(PerformanceTracker::TaskId::kFrameStats);
+        UpdateFrameStats();
+      }
+      {
+        auto task = performanceTracker_.Measure(PerformanceTracker::TaskId::kRenderer);
+        RenderScene();
+        EndImGuiFrame();
+      }
+      performanceTracker_.EndFrame();
 
       if (pendingExportPath_) {
         const std::filesystem::path exportPath = *pendingExportPath_;
@@ -1064,7 +1174,8 @@ void Application::InitializeWindow() {
     window_,
     [this]() { StartOpenDialog(); },
     [this]() { StartSaveDialog(); },
-    [this]() { ResetView(); });
+    [this]() { ResetView(); },
+    [this]() { taskManagerOpen_ = true; });
   useImGuiMenuBar_ = !nativeMenuInstalled;
 }
 
@@ -1161,6 +1272,9 @@ float Application::RenderMenuBar() {
         ResetView();
       }
       ImGui::MenuItem(hideBoxesVisible_ ? "Hide boxes" : "Show boxes", nullptr, &hideBoxesVisible_, hasHideBoxes);
+      if (ImGui::MenuItem("Task manager", nullptr, taskManagerOpen_)) {
+        taskManagerOpen_ = !taskManagerOpen_;
+      }
       ImGui::EndMenu();
     }
 
@@ -1466,6 +1580,96 @@ void Application::RenderUi() {
   }
 
   RenderSelectIsolatedDialog();
+  RenderTaskManagerWindow();
+}
+
+void Application::RenderTaskManagerWindow() {
+  if (!taskManagerOpen_) {
+    return;
+  }
+
+  ImGui::SetNextWindowSize(ImVec2(760.0f, 420.0f), ImGuiCond_FirstUseEver);
+  if (!ImGui::Begin("Task Manager", &taskManagerOpen_, ImGuiWindowFlags_NoCollapse)) {
+    ImGui::End();
+    return;
+  }
+
+  const std::uint64_t totalSystemMemoryBytes = performanceTracker_.TotalSystemMemoryBytes();
+  const std::uint64_t attributedMemoryBytes = performanceTracker_.AttributedMemoryBytes();
+  const double attributedMemoryPercent = totalSystemMemoryBytes == 0
+    ? 0.0
+    : static_cast<double>(attributedMemoryBytes) * 100.0 / static_cast<double>(totalSystemMemoryBytes);
+
+  if (totalSystemMemoryBytes > 0) {
+    const std::string ramLabel = FormatMemoryBytes(totalSystemMemoryBytes);
+    const std::string attributedLabel = FormatMemoryBytes(attributedMemoryBytes);
+    ImGui::Text(
+      "Installed RAM: %s  Attributed: %s (%.4f%%)  Frame: %.2f ms",
+      ramLabel.c_str(),
+      attributedLabel.c_str(),
+      attributedMemoryPercent,
+      performanceTracker_.SmoothedFrameMs());
+  } else {
+    ImGui::Text(
+      "Attributed memory: %s  Frame: %.2f ms",
+      FormatMemoryBytes(attributedMemoryBytes).c_str(),
+      performanceTracker_.SmoothedFrameMs());
+  }
+  ImGui::TextWrapped("Memory is an attributed resident and GPU estimate by subsystem. Frame contribution uses smoothed timings from the main frame loop.");
+  ImGui::Separator();
+
+  std::vector<PerformanceTracker::TaskRow> rows = performanceTracker_.BuildRows();
+  ImGuiTableFlags tableFlags =
+    ImGuiTableFlags_Borders |
+    ImGuiTableFlags_RowBg |
+    ImGuiTableFlags_Sortable |
+    ImGuiTableFlags_SizingStretchProp |
+    ImGuiTableFlags_ScrollY;
+
+  if (ImGui::BeginTable("##task-manager-table", 5, tableFlags, ImVec2(0.0f, 0.0f))) {
+    ImGui::TableSetupScrollFreeze(0, 1);
+    ImGui::TableSetupColumn("Operation", ImGuiTableColumnFlags_WidthStretch);
+    ImGui::TableSetupColumn("Memory % RAM", ImGuiTableColumnFlags_PreferSortDescending);
+    ImGui::TableSetupColumn(
+      "Frame %",
+      ImGuiTableColumnFlags_DefaultSort | ImGuiTableColumnFlags_PreferSortDescending);
+    ImGui::TableSetupColumn("Memory", ImGuiTableColumnFlags_PreferSortDescending);
+    ImGui::TableSetupColumn("CPU ms", ImGuiTableColumnFlags_PreferSortDescending);
+    ImGui::TableHeadersRow();
+
+    SortTaskManagerRows(rows, ImGui::TableGetSortSpecs());
+
+    for (const PerformanceTracker::TaskRow& row : rows) {
+      ImGui::TableNextRow();
+      ImGui::TableNextColumn();
+      ImGui::TextUnformatted(row.label);
+      ImGui::TableNextColumn();
+      ImGui::Text("%.4f%%", row.memoryPercent);
+      ImGui::TableNextColumn();
+      ImGui::Text("%.1f%%", row.frameContributionPercent);
+      ImGui::TableNextColumn();
+      ImGui::TextUnformatted(FormatMemoryBytes(row.memoryBytes).c_str());
+      ImGui::TableNextColumn();
+      ImGui::Text("%.3f", row.smoothedFrameMs);
+    }
+
+    ImGui::EndTable();
+  }
+
+  ImGui::End();
+}
+
+void Application::UpdateTaskManagerMemoryStats() {
+  performanceTracker_.SetTaskMemoryBytes(PerformanceTracker::TaskId::kEventLoop, 0);
+  performanceTracker_.SetTaskMemoryBytes(PerformanceTracker::TaskId::kPointCloud, EstimatePointCloudMemoryBytes());
+  performanceTracker_.SetTaskMemoryBytes(PerformanceTracker::TaskId::kUi, 0);
+  performanceTracker_.SetTaskMemoryBytes(PerformanceTracker::TaskId::kHideBoxTools, EstimateHideBoxMemoryBytes());
+  performanceTracker_.SetTaskMemoryBytes(PerformanceTracker::TaskId::kPointSelection, EstimatePointSelectionMemoryBytes());
+  performanceTracker_.SetTaskMemoryBytes(PerformanceTracker::TaskId::kCamera, 0);
+  performanceTracker_.SetTaskMemoryBytes(PerformanceTracker::TaskId::kDeletionWorkflow, EstimateDeletionWorkflowMemoryBytes());
+  performanceTracker_.SetTaskMemoryBytes(PerformanceTracker::TaskId::kIsolatedSelection, EstimateIsolatedSelectionMemoryBytes());
+  performanceTracker_.SetTaskMemoryBytes(PerformanceTracker::TaskId::kFrameStats, 0);
+  performanceTracker_.SetTaskMemoryBytes(PerformanceTracker::TaskId::kRenderer, renderer_.ApproximateGpuBytes());
 }
 
 void Application::RenderSaveProgressOverlay() {
@@ -2503,6 +2707,43 @@ std::vector<SelectionSphere> Application::BuildSelectionSpheres() const {
     });
   }
   return selectionSpheres;
+}
+
+std::uint64_t Application::EstimatePointCloudMemoryBytes() const {
+  return CapacityBytes(currentCloud_.points) + loader_.ApproximateResidentBytes();
+}
+
+std::uint64_t Application::EstimateHideBoxMemoryBytes() const {
+  return CapacityBytes(hideBoxes_) + CapacityBytes(committedHideBoxes_);
+}
+
+std::uint64_t Application::EstimatePointSelectionMemoryBytes() const {
+  return CapacityBytes(pointSelections_);
+}
+
+std::uint64_t Application::EstimateDeletionWorkflowMemoryBytes() const {
+  std::uint64_t bytes = 0;
+  bytes += CapacityBytes(deletionMarkedPointIndices_);
+  bytes += CapacityBytes(deletionCandidateIndices_);
+  bytes += CapacityBytes(deletionSelectionSpheres_);
+  bytes += CapacityBytes(deletionFreeformPolygon_);
+  bytes += CapacityBytes(deletionFreeformHideBoxes_);
+  bytes += CapacityBytes(deletionFreeformTriangles_);
+  bytes += CapacityBytes(deletionCandidateStamp_);
+  bytes += static_cast<std::uint64_t>(deletionGrid_.size()) * sizeof(decltype(deletionGrid_)::value_type);
+  for (const auto& [key, indices] : deletionGrid_) {
+    (void)key;
+    bytes += CapacityBytes(indices);
+  }
+  return bytes;
+}
+
+std::uint64_t Application::EstimateIsolatedSelectionMemoryBytes() {
+  std::uint64_t bytes = CapacityBytes(isolatedMatchedPointIndices_);
+  std::scoped_lock lock(isolatedSearchWorkerMutex_);
+  bytes += CapacityBytes(isolatedSearchWorkerState_.completedMatches);
+  bytes += static_cast<std::uint64_t>(isolatedSearchWorkerState_.message.capacity());
+  return bytes;
 }
 
 void Application::RebuildPointCloudRenderer() {

@@ -849,6 +849,17 @@ std::size_t PointCloudRenderer::DisplayPointCount(RenderDetail detail, float int
   return displayPointCount;
 }
 
+std::uint64_t PointCloudRenderer::ApproximateGpuBytes() const {
+  const std::uint64_t pointBytes = static_cast<std::uint64_t>(pointCount_) * sizeof(PointVertex);
+  const int hideBoxRows = (std::max)(hideBoxCount_, 1);
+  const std::uint64_t hideBoxTextureBytes =
+    static_cast<std::uint64_t>(hideBoxRows) *
+    kHideBoxTextureWidth *
+    4ULL *
+    sizeof(float);
+  return pointBytes + hideBoxTextureBytes;
+}
+
 const Bounds& PointCloudRenderer::CurrentBounds() const {
   return bounds_;
 }

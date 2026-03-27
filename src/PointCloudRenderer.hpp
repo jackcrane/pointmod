@@ -53,6 +53,7 @@ class PointCloudRenderer {
   [[nodiscard]] bool HasCloud() const;
   [[nodiscard]] std::size_t PointCount() const;
   [[nodiscard]] std::size_t DisplayPointCount(RenderDetail detail, float interactionPointFraction) const;
+  [[nodiscard]] std::uint64_t ApproximateGpuBytes() const;
   [[nodiscard]] const Bounds& CurrentBounds() const;
   [[nodiscard]] std::string Error() const;
 
