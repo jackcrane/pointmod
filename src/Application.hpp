@@ -196,7 +196,6 @@ class Application {
   void InvalidateDeletionSpatialIndex();
   void EnsureDeletionSpatialIndex();
   std::vector<std::size_t> CollectDeletionCandidateIndices(const std::vector<SelectionSphere>& selectionSpheres);
-  std::vector<std::size_t> CollectFreeformDeletionCandidateIndices();
   void CommitHideBoxes();
   void ResetHideBoxGizmo();
 
@@ -281,9 +280,6 @@ class Application {
   ImVec2 deletionFreeformViewportOrigin_ = {0.0f, 0.0f};
   ImVec2 deletionFreeformViewportSize_ = {0.0f, 0.0f};
   std::vector<HideBox> deletionFreeformHideBoxes_;
-  Vec3 deletionFreeformOrigin_ = {0.0f, 0.0f, 0.0f};
-  Vec3 deletionFreeformForward_ = {0.0f, 0.0f, -1.0f};
-  std::vector<std::array<Vec3, 3>> deletionFreeformTriangles_;
   bool deletionGridValid_ = false;
   float deletionGridCellSize_ = 1.0f;
   std::unordered_map<DeletionGridKey, std::vector<std::size_t>, DeletionGridKeyHash> deletionGrid_;

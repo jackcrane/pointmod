@@ -70,8 +70,6 @@ struct PointPickResult {
   float cameraDistance = FLT_MAX;
 };
 
-using FreeformTrianglePlanes = std::array<Vec3, 3>;
-
 Vec3 PointPosition(const PointVertex& point) {
   return {point.x, point.y, point.z};
 }
@@ -401,154 +399,6 @@ void BuildCameraBasis(const OrbitCamera& camera, Vec3& forward, Vec3& right, Vec
     right = {1.0f, 0.0f, 0.0f};
   }
   up = Normalize(Cross(right, forward));
-}
-
-float ProjectedAabbHalfExtent(const Vec3& halfExtents, const Vec3& normal) {
-  return
-    std::abs(normal.x) * halfExtents.x +
-    std::abs(normal.y) * halfExtents.y +
-    std::abs(normal.z) * halfExtents.z;
-}
-
-bool AabbIntersectsPlaneHalfSpace(const Vec3& center, const Vec3& halfExtents, const Vec3& planeOrigin, const Vec3& planeNormal) {
-  const float signedDistance = Dot(planeNormal, center - planeOrigin);
-  const float projectedRadius = ProjectedAabbHalfExtent(halfExtents, planeNormal);
-  return signedDistance + projectedRadius >= 0.0f;
-}
-
-bool PointInsideTriangleCone(
-  const Vec3& point,
-  const Vec3& origin,
-  const Vec3& forward,
-  const FreeformTrianglePlanes& trianglePlanes) {
-  const Vec3 offset = point - origin;
-  if (Dot(forward, offset) <= 0.0f) {
-    return false;
-  }
-
-  constexpr float kPlaneEpsilon = 0.0001f;
-  for (const Vec3& planeNormal : trianglePlanes) {
-    if (Dot(planeNormal, offset) < -kPlaneEpsilon) {
-      return false;
-    }
-  }
-  return true;
-}
-
-bool AabbIntersectsTriangleCone(
-  const Vec3& center,
-  const Vec3& halfExtents,
-  const Vec3& origin,
-  const Vec3& forward,
-  const FreeformTrianglePlanes& trianglePlanes) {
-  if (!AabbIntersectsPlaneHalfSpace(center, halfExtents, origin, forward)) {
-    return false;
-  }
-
-  for (const Vec3& planeNormal : trianglePlanes) {
-    if (!AabbIntersectsPlaneHalfSpace(center, halfExtents, origin, planeNormal)) {
-      return false;
-    }
-  }
-  return true;
-}
-
-bool BuildFreeformSelectionTriangles(
-  const std::vector<ImVec2>& polygon,
-  const OrbitCamera& camera,
-  const ImVec2& viewportOrigin,
-  const ImVec2& viewportSize,
-  std::vector<FreeformTrianglePlanes>& trianglePlanes,
-  Vec3& forward) {
-  trianglePlanes.clear();
-  if (polygon.size() < 3 || viewportSize.x <= 0.0f || viewportSize.y <= 0.0f) {
-    return false;
-  }
-
-  std::vector<int> triangleIndices;
-  if (!TriangulateScreenPolygon(polygon, triangleIndices)) {
-    return false;
-  }
-
-  Vec3 right;
-  Vec3 up;
-  BuildCameraBasis(camera, forward, right, up);
-  if (Length(forward) <= 0.0f) {
-    return false;
-  }
-
-  std::vector<Vec3> rayDirections;
-  rayDirections.reserve(polygon.size());
-  for (const ImVec2& point : polygon) {
-    rayDirections.push_back(BuildCameraRay(
-      camera,
-      point.x - viewportOrigin.x,
-      point.y - viewportOrigin.y,
-      viewportSize.x,
-      viewportSize.y).direction);
-  }
-
-  trianglePlanes.reserve(triangleIndices.size() / 3);
-  for (std::size_t triangleIndex = 0; triangleIndex + 2 < triangleIndices.size(); triangleIndex += 3) {
-    const Vec3& rayA = rayDirections[static_cast<std::size_t>(triangleIndices[triangleIndex])];
-    const Vec3& rayB = rayDirections[static_cast<std::size_t>(triangleIndices[triangleIndex + 1])];
-    const Vec3& rayC = rayDirections[static_cast<std::size_t>(triangleIndices[triangleIndex + 2])];
-
-    const Vec3 triangleCenterDirection = Normalize(rayA + rayB + rayC);
-    if (Length(triangleCenterDirection) <= 0.0f) {
-      continue;
-    }
-
-    FreeformTrianglePlanes triangle{};
-    const Vec3 triangleRays[3] = {rayA, rayB, rayC};
-    bool validTriangle = true;
-    for (int edgeIndex = 0; edgeIndex < 3; ++edgeIndex) {
-      Vec3 planeNormal = Cross(
-        triangleRays[edgeIndex],
-        triangleRays[(edgeIndex + 1) % 3]);
-      if (Length(planeNormal) <= 0.00001f) {
-        validTriangle = false;
-        break;
-      }
-      if (Dot(planeNormal, triangleCenterDirection) < 0.0f) {
-        planeNormal = planeNormal * -1.0f;
-      }
-      triangle[static_cast<std::size_t>(edgeIndex)] = Normalize(planeNormal);
-    }
-
-    if (validTriangle) {
-      trianglePlanes.push_back(triangle);
-    }
-  }
-
-  return !trianglePlanes.empty();
-}
-
-bool PointInsideFreeformSelection(
-  const Vec3& point,
-  const Vec3& origin,
-  const Vec3& forward,
-  const std::vector<FreeformTrianglePlanes>& trianglePlanes) {
-  for (const FreeformTrianglePlanes& triangle : trianglePlanes) {
-    if (PointInsideTriangleCone(point, origin, forward, triangle)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-bool AabbIntersectsFreeformSelection(
-  const Vec3& center,
-  const Vec3& halfExtents,
-  const Vec3& origin,
-  const Vec3& forward,
-  const std::vector<FreeformTrianglePlanes>& trianglePlanes) {
-  for (const FreeformTrianglePlanes& triangle : trianglePlanes) {
-    if (AabbIntersectsTriangleCone(center, halfExtents, origin, forward, triangle)) {
-      return true;
-    }
-  }
-  return false;
 }
 
 bool IntersectRayPlane(const CameraRay& ray, const Vec3& planeOrigin, const Vec3& planeNormal, Vec3& hitPoint) {
@@ -2728,7 +2578,6 @@ std::uint64_t Application::EstimateDeletionWorkflowMemoryBytes() const {
   bytes += CapacityBytes(deletionSelectionSpheres_);
   bytes += CapacityBytes(deletionFreeformPolygon_);
   bytes += CapacityBytes(deletionFreeformHideBoxes_);
-  bytes += CapacityBytes(deletionFreeformTriangles_);
   bytes += CapacityBytes(deletionCandidateStamp_);
   bytes += static_cast<std::uint64_t>(deletionGrid_.size()) * sizeof(decltype(deletionGrid_)::value_type);
   for (const auto& [key, indices] : deletionGrid_) {
@@ -2877,51 +2726,6 @@ std::vector<std::size_t> Application::CollectDeletionCandidateIndices(const std:
   return candidates;
 }
 
-std::vector<std::size_t> Application::CollectFreeformDeletionCandidateIndices() {
-  EnsureDeletionSpatialIndex();
-  if (deletionCandidateStamp_.size() != currentCloud_.points.size()) {
-    deletionCandidateStamp_.assign(currentCloud_.points.size(), 0);
-  }
-  ++deletionCandidateStampValue_;
-  if (deletionCandidateStampValue_ == 0) {
-    std::fill(deletionCandidateStamp_.begin(), deletionCandidateStamp_.end(), 0);
-    deletionCandidateStampValue_ = 1;
-  }
-
-  std::vector<std::size_t> candidates;
-  if (deletionFreeformTriangles_.empty()) {
-    return candidates;
-  }
-
-  const float halfCellExtent = deletionGridCellSize_ * 0.5f;
-  const Vec3 halfExtents = {halfCellExtent, halfCellExtent, halfCellExtent};
-  for (const auto& [cellKey, cellPoints] : deletionGrid_) {
-    const Vec3 cellCenter = {
-      (static_cast<float>(cellKey.x) + 0.5f) * deletionGridCellSize_,
-      (static_cast<float>(cellKey.y) + 0.5f) * deletionGridCellSize_,
-      (static_cast<float>(cellKey.z) + 0.5f) * deletionGridCellSize_,
-    };
-    if (!AabbIntersectsFreeformSelection(
-          cellCenter,
-          halfExtents,
-          deletionFreeformOrigin_,
-          deletionFreeformForward_,
-          deletionFreeformTriangles_)) {
-      continue;
-    }
-
-    for (std::size_t pointIndex : cellPoints) {
-      if (deletionCandidateStamp_[pointIndex] == deletionCandidateStampValue_) {
-        continue;
-      }
-      deletionCandidateStamp_[pointIndex] = deletionCandidateStampValue_;
-      candidates.push_back(pointIndex);
-    }
-  }
-
-  return candidates;
-}
-
 void Application::BeginDeletionMarking() {
   if (isolatedSelectionWorkflowState_ != IsolatedSelectionWorkflowState::kDeleting) {
     CancelIsolatedSelectionSearch();
@@ -2941,7 +2745,6 @@ void Application::BeginDeletionMarking() {
   deletionWorkflowState_ = DeletionWorkflowState::kMarking;
   deletionProcessCursor_ = 0;
   deletionTargetHideBoxActive_ = false;
-  deletionFreeformTriangles_.clear();
   deletionEmptyMessage_ = "No points fell inside the selected spheres.";
   ClearPointSelections();
   hoveredPointActive_ = false;
@@ -2972,7 +2775,6 @@ void Application::BeginHideBoxDeletionMarking(int hideBoxIndex) {
   deletionProcessCursor_ = 0;
   deletionFreeformPolygon_.clear();
   deletionFreeformHideBoxes_.clear();
-  deletionFreeformTriangles_.clear();
   deletionTargetHideBox_ = hideBoxes_[static_cast<std::size_t>(hideBoxIndex)];
   deletionTargetHideBoxActive_ = true;
   deletionEmptyMessage_ = "No points fell inside the selected hide box.";
@@ -2998,7 +2800,7 @@ void Application::BeginFreeformDeletionMarking(
   }
 
   deletionSelectionSpheres_.clear();
-  deletionFreeformTriangles_.clear();
+  deletionCandidateIndices_.clear();
   if (!additive) {
     deletionMarkedPointIndices_.clear();
     deletionMarkedCount_ = 0;
@@ -3015,19 +2817,8 @@ void Application::BeginFreeformDeletionMarking(
   deletionFreeformViewportOrigin_ = viewportOrigin;
   deletionFreeformViewportSize_ = viewportSize;
   deletionFreeformHideBoxes_ = committedHideBoxes_;
-  deletionFreeformOrigin_ = camera_.Position();
-  BuildFreeformSelectionTriangles(
-    deletionFreeformPolygon_,
-    camera_,
-    viewportOrigin,
-    viewportSize,
-    deletionFreeformTriangles_,
-    deletionFreeformForward_);
-  deletionCandidateIndices_ = CollectFreeformDeletionCandidateIndices();
   if (!additive) {
-    deletionMarkedPointIndices_.reserve(deletionCandidateIndices_.empty() ? currentCloud_.points.size() : deletionCandidateIndices_.size());
-  } else {
-    deletionMarkedPointIndices_.reserve(deletionMarkedPointIndices_.size() + deletionCandidateIndices_.size());
+    deletionMarkedPointIndices_.reserve(currentCloud_.points.size());
   }
   hoveredPointActive_ = false;
   hoverPickCache_.valid = false;
@@ -3051,7 +2842,6 @@ void Application::CancelDeletionWorkflow() {
   deletionTargetHideBoxActive_ = false;
   deletionFreeformPolygon_.clear();
   deletionFreeformHideBoxes_.clear();
-  deletionFreeformTriangles_.clear();
   deletionConfirmPending_ = false;
   deletionMarkedCount_ = 0;
   deletionWorkflowState_ = DeletionWorkflowState::kIdle;
@@ -3079,7 +2869,6 @@ void Application::ConfirmDeletion() {
   deletionTargetHideBoxActive_ = false;
   deletionFreeformPolygon_.clear();
   deletionFreeformHideBoxes_.clear();
-  deletionFreeformTriangles_.clear();
   ClearPointSelections();
   hoveredPointActive_ = false;
   hoverPickCache_.valid = false;
@@ -3829,38 +3618,6 @@ void Application::UpdateDeletionWorkflow() {
       if (deletionProcessCursor_ < deletionCandidateIndices_.size()) {
         return;
       }
-    } else if (!deletionFreeformTriangles_.empty()) {
-      const std::size_t end = (std::min)(deletionCandidateIndices_.size(), deletionProcessCursor_ + kDeletionWorkChunkPoints);
-      for (std::size_t candidateIndex = deletionProcessCursor_; candidateIndex < end; ++candidateIndex) {
-        const std::size_t pointIndex = deletionCandidateIndices_[candidateIndex];
-        if (pointIndex >= currentCloud_.points.size()) {
-          continue;
-        }
-
-        PointVertex& point = currentCloud_.points[pointIndex];
-        if ((point.flags & kPointFlagMarkedForDeletion) != 0) {
-          continue;
-        }
-
-        const Vec3 position = PointPosition(point);
-        if (IsPointHidden(position, deletionFreeformHideBoxes_)) {
-          continue;
-        }
-        if (!PointInsideFreeformSelection(
-              position,
-              deletionFreeformOrigin_,
-              deletionFreeformForward_,
-              deletionFreeformTriangles_)) {
-          continue;
-        }
-
-        point.flags |= kPointFlagMarkedForDeletion;
-        deletionMarkedPointIndices_.push_back(pointIndex);
-      }
-      deletionProcessCursor_ = end;
-      if (deletionProcessCursor_ < deletionCandidateIndices_.size()) {
-        return;
-      }
     } else {
       const std::size_t end = (std::min)(currentCloud_.points.size(), deletionProcessCursor_ + kDeletionWorkChunkPoints);
       for (std::size_t pointIndex = deletionProcessCursor_; pointIndex < end; ++pointIndex) {
@@ -3925,7 +3682,6 @@ void Application::UpdateDeletionWorkflow() {
     deletionTargetHideBoxActive_ = false;
     deletionFreeformPolygon_.clear();
     deletionFreeformHideBoxes_.clear();
-    deletionFreeformTriangles_.clear();
     deletionProcessCursor_ = 0;
     if (deletionConfirmPending_) {
       statusMessage_ = "Marked " + std::to_string(deletionMarkedCount_) + " points for deletion. Press Backspace again to confirm.";
@@ -3947,7 +3703,6 @@ void Application::UpdateDeletionWorkflow() {
   deletionTargetHideBoxActive_ = false;
   deletionFreeformPolygon_.clear();
   deletionFreeformHideBoxes_.clear();
-  deletionFreeformTriangles_.clear();
   deletionProcessCursor_ = 0;
   InvalidateDeletionSpatialIndex();
   RebuildPointCloudRenderer();
@@ -4027,7 +3782,6 @@ void Application::OpenPointCloud(const std::filesystem::path& path) {
   deletionTargetHideBoxActive_ = false;
   deletionFreeformPolygon_.clear();
   deletionFreeformHideBoxes_.clear();
-  deletionFreeformTriangles_.clear();
   deletionProcessCursor_ = 0;
   selectIsolatedDialogOpen_ = false;
   isolatedPreviewValid_ = false;
