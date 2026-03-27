@@ -1053,7 +1053,6 @@ void Application::RenderUi() {
     if (!hasHideBoxes) {
       ImGui::EndDisabled();
     }
-    ImGui::SameLine();
     const bool hasPointSelections = !pointSelections_.empty();
     if (!hasPointSelections) {
       ImGui::BeginDisabled();

@@ -37,7 +37,7 @@ void AsyncPointCloudLoader::Start(const std::filesystem::path& path) {
 
   worker_ = std::jthread([this, path](std::stop_token stopToken) {
     try {
-      PointCloudData cloud = LoadAsciiPly(
+      PointCloudData cloud = LoadPly(
         path,
         options_,
         stopToken,

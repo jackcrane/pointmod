@@ -24,7 +24,7 @@ struct PlyLoadProgress {
 using PlyLoadProgressCallback = std::function<void(const PlyLoadProgress&)>;
 using PlyPointChunkCallback = std::function<void(PointCloudChunk&&)>;
 
-PointCloudData LoadAsciiPly(
+PointCloudData LoadPly(
   const std::filesystem::path& path,
   const PlyLoadOptions& options,
   std::stop_token stopToken,

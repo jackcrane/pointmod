@@ -66,9 +66,53 @@ body {
 
 .header {
   background-color: #000;
-  border: 1px solid rgb(128, 128, 128);
+  border: 1px solid rgb(64, 64, 64);
+  outline: 2px solid rgb(0, 0, 0);
   width: 80%;
   margin: 0 auto;
   margin-top: 30px;
-  padding: 10px 20px;
+  padding: 5px 20px;
+  display: flex;
+  align-items: center;
+  flex-direction: row;
+}
+
+.header .icon {
+  height: 30px;
+}
+
+.cta {
+  background-color: hsl(0, 0%, 80%);
+  transition: background-color 0.2s ease-in-out;
+  color: black;
+  padding: 2px 5px;
+  border: 1px solid black;
+  outline: 1px solid hsl(0, 0%, 90%);
+  text-decoration: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.cta .arrow-line {
+  position: relative;
+}
+
+.cta .arrow-line span {
+  position: absolute;
+  top: -12px;
+  left: -5px;
+  transition:
+    top 0.1s ease-in-out,
+    left 0.1s ease-in-out;
+  color: black;
+}
+
+.cta:hover .arrow-line span {
+  top: -16.3px;
+  left: 1.8px;
+}
+
+.cta:hover {
+  background-color: hsl(0, 0%, 100%);
 }
