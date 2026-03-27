@@ -628,6 +628,50 @@ Bounds ComputeBounds(const std::vector<PointVertex>& points) {
   return bounds;
 }
 
+template <typename Index>
+std::size_t ErasePointsByIndex(std::vector<PointVertex>& points, std::vector<Index>& pointIndices) {
+  if (points.empty() || pointIndices.empty()) {
+    pointIndices.clear();
+    return 0;
+  }
+
+  std::sort(pointIndices.begin(), pointIndices.end());
+
+  std::size_t writeIndex = 0;
+  std::size_t readIndex = 0;
+  std::size_t deletedCount = 0;
+  const std::size_t pointCount = points.size();
+
+  for (const Index rawIndex : pointIndices) {
+    const std::size_t pointIndex = static_cast<std::size_t>(rawIndex);
+    if (pointIndex >= pointCount || pointIndex < readIndex) {
+      continue;
+    }
+
+    if (pointIndex > readIndex) {
+      const auto sourceBegin = points.begin() + static_cast<std::ptrdiff_t>(readIndex);
+      const auto sourceEnd = points.begin() + static_cast<std::ptrdiff_t>(pointIndex);
+      const auto destination = points.begin() + static_cast<std::ptrdiff_t>(writeIndex);
+      std::move(sourceBegin, sourceEnd, destination);
+      writeIndex += pointIndex - readIndex;
+    }
+
+    readIndex = pointIndex + 1;
+    ++deletedCount;
+  }
+
+  if (readIndex < pointCount) {
+    const auto sourceBegin = points.begin() + static_cast<std::ptrdiff_t>(readIndex);
+    const auto destination = points.begin() + static_cast<std::ptrdiff_t>(writeIndex);
+    std::move(sourceBegin, points.end(), destination);
+    writeIndex += pointCount - readIndex;
+  }
+
+  points.resize(writeIndex);
+  pointIndices.clear();
+  return deletedCount;
+}
+
 float ComputePickRadiusPixels(float pointSize, float paddingPixels) {
   return (std::max)(pointSize * 0.75f + paddingPixels, paddingPixels);
 }
@@ -2716,8 +2760,6 @@ void Application::ConfirmDeletion() {
   deletionConfirmPending_ = false;
   deletionWorkflowState_ = DeletionWorkflowState::kDeleting;
   deletionProcessCursor_ = 0;
-  deletionWorkingPoints_.clear();
-  deletionWorkingPoints_.reserve(currentCloud_.points.size() - deletionMarkedPointIndices_.size());
   deletionSelectionSpheres_.clear();
   deletionCandidateIndices_.clear();
   deletionTargetHideBoxActive_ = false;
@@ -2758,7 +2800,6 @@ void Application::StartIsolatedSelectionPreview() {
   isolatedCellSize_ = 0.0f;
   isolatedMatchedCount_ = 0;
   isolatedMatchedPointIndices_.clear();
-  isolatedDeletionWorkingPoints_.clear();
   isolatedVisiblePointCount_ = 0;
   isolatedProcessCursor_ = 0;
   isolatedSelectionWorkflowState_ = IsolatedSelectionWorkflowState::kCollecting;
@@ -3057,8 +3098,6 @@ void Application::StartIsolatedSelectionDeletion() {
 
   isolatedSelectionWorkflowState_ = IsolatedSelectionWorkflowState::kDeleting;
   isolatedProcessCursor_ = 0;
-  isolatedDeletionWorkingPoints_.clear();
-  isolatedDeletionWorkingPoints_.reserve(currentCloud_.points.size() - isolatedMatchedPointIndices_.size());
   ClearPointSelections();
   hoveredPointActive_ = false;
   hoverPickCache_.valid = false;
@@ -3130,24 +3169,7 @@ void Application::UpdateIsolatedSelectionWorkflow() {
     return;
   }
 
-  const std::size_t end = (std::min)(currentCloud_.points.size(), isolatedProcessCursor_ + kDeletionWorkChunkPoints);
-  for (std::size_t pointIndex = isolatedProcessCursor_; pointIndex < end; ++pointIndex) {
-    const PointVertex& point = currentCloud_.points[pointIndex];
-    if ((point.flags & kPointFlagIsolatedPreview) != 0) {
-      continue;
-    }
-    isolatedDeletionWorkingPoints_.push_back(point);
-  }
-
-  isolatedProcessCursor_ = end;
-  if (isolatedProcessCursor_ < currentCloud_.points.size()) {
-    return;
-  }
-
-  const std::size_t deletedPointCount = isolatedMatchedPointIndices_.size();
-  currentCloud_.points = std::move(isolatedDeletionWorkingPoints_);
-  isolatedDeletionWorkingPoints_.clear();
-  isolatedMatchedPointIndices_.clear();
+  const std::size_t deletedPointCount = ErasePointsByIndex(currentCloud_.points, isolatedMatchedPointIndices_);
   isolatedMatchedCount_ = 0;
   isolatedPreviewValid_ = false;
   isolatedSelectionWorkflowState_ = IsolatedSelectionWorkflowState::kIdle;
@@ -3181,7 +3203,6 @@ void Application::ClearIsolatedSelectionPreview() {
 
   const bool hadPreview = isolatedPreviewValid_ || !isolatedMatchedPointIndices_.empty();
   isolatedMatchedPointIndices_.clear();
-  isolatedDeletionWorkingPoints_.clear();
   isolatedCellSize_ = 0.0f;
   isolatedMatchedCount_ = 0;
   isolatedPreviewValid_ = false;
@@ -3604,24 +3625,7 @@ void Application::UpdateDeletionWorkflow() {
     return;
   }
 
-  const std::size_t end = (std::min)(currentCloud_.points.size(), deletionProcessCursor_ + kDeletionWorkChunkPoints);
-  for (std::size_t pointIndex = deletionProcessCursor_; pointIndex < end; ++pointIndex) {
-    const PointVertex& point = currentCloud_.points[pointIndex];
-    if ((point.flags & kPointFlagMarkedForDeletion) != 0) {
-      continue;
-    }
-    deletionWorkingPoints_.push_back(point);
-  }
-
-  deletionProcessCursor_ = end;
-  if (deletionProcessCursor_ < currentCloud_.points.size()) {
-    return;
-  }
-
-  currentCloud_.points = std::move(deletionWorkingPoints_);
-  deletionWorkingPoints_.clear();
-  const std::size_t deletedPointCount = deletionMarkedPointIndices_.size();
-  deletionMarkedPointIndices_.clear();
+  const std::size_t deletedPointCount = ErasePointsByIndex(currentCloud_.points, deletionMarkedPointIndices_);
   deletionMarkedCount_ = 0;
   deletionWorkflowState_ = DeletionWorkflowState::kIdle;
   deletionSelectionSpheres_.clear();
@@ -3710,14 +3714,12 @@ void Application::OpenPointCloud(const std::filesystem::path& path) {
   deletionFreeformPolygon_.clear();
   deletionFreeformHideBoxes_.clear();
   deletionFreeformTriangles_.clear();
-  deletionWorkingPoints_.clear();
   deletionProcessCursor_ = 0;
   selectIsolatedDialogOpen_ = false;
   isolatedPreviewValid_ = false;
   isolatedMatchedCount_ = 0;
   isolatedSelectionWorkflowState_ = IsolatedSelectionWorkflowState::kIdle;
   isolatedMatchedPointIndices_.clear();
-  isolatedDeletionWorkingPoints_.clear();
   isolatedCellSize_ = 0.0f;
   isolatedVisiblePointCount_ = 0;
   isolatedProcessCursor_ = 0;

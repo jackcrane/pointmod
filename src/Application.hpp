@@ -269,7 +269,6 @@ class Application {
   std::unordered_map<DeletionGridKey, std::vector<std::size_t>, DeletionGridKeyHash> deletionGrid_;
   std::vector<std::uint32_t> deletionCandidateStamp_;
   std::uint32_t deletionCandidateStampValue_ = 1;
-  std::vector<PointVertex> deletionWorkingPoints_;
   std::size_t deletionProcessCursor_ = 0;
   bool selectIsolatedDialogOpen_ = false;
   float isolatedNeighborDistance_ = 0.1f;
@@ -279,7 +278,6 @@ class Application {
   std::size_t isolatedMatchedCount_ = 0;
   IsolatedSelectionWorkflowState isolatedSelectionWorkflowState_ = IsolatedSelectionWorkflowState::kIdle;
   std::vector<std::uint32_t> isolatedMatchedPointIndices_;
-  std::vector<PointVertex> isolatedDeletionWorkingPoints_;
   std::size_t isolatedVisiblePointCount_ = 0;
   std::size_t isolatedProcessCursor_ = 0;
   std::mutex isolatedSearchWorkerMutex_;
