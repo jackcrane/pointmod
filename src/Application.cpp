@@ -49,6 +49,8 @@ constexpr float kInteractionProbeFps = 50.0f;
 constexpr float kInteractionPointDropFactor = 0.5f;
 constexpr float kMinInteractionPointFraction = 0.001f;
 constexpr double kInteractionTuneIntervalSeconds = 0.2;
+constexpr std::size_t kSaveProgressUpdatePoints = 50'000;
+constexpr double kSaveProgressPresentIntervalSeconds = 1.0 / 30.0;
 constexpr std::size_t kDeletionWorkChunkPoints = 200'000;
 constexpr Vec3 kWorldUp = {0.0f, 0.0f, 1.0f};
 constexpr std::uint8_t kPointFlagIsolatedPreview = 1 << 0;
@@ -1002,6 +1004,12 @@ int Application::Run() {
       UpdateFrameStats();
       RenderScene();
       EndImGuiFrame();
+
+      if (pendingExportPath_) {
+        const std::filesystem::path exportPath = *pendingExportPath_;
+        pendingExportPath_.reset();
+        ExportPointCloud(exportPath);
+      }
     }
 
     Shutdown();
@@ -1458,6 +1466,71 @@ void Application::RenderUi() {
   }
 
   RenderSelectIsolatedDialog();
+}
+
+void Application::RenderSaveProgressOverlay() {
+  if (!saveProgress_.active) {
+    return;
+  }
+
+  const ImGuiViewport* viewport = ImGui::GetMainViewport();
+  const float progress = saveProgress_.total == 0
+    ? 1.0f
+    : static_cast<float>(saveProgress_.processed) / static_cast<float>(saveProgress_.total);
+
+  ImGui::SetNextWindowPos(
+    ImVec2(
+      viewport->WorkPos.x + viewport->WorkSize.x * 0.5f,
+      viewport->WorkPos.y + viewport->WorkSize.y * 0.5f),
+    ImGuiCond_Always,
+    ImVec2(0.5f, 0.5f));
+  ImGui::SetNextWindowBgAlpha(0.94f);
+  if (ImGui::Begin(
+        "Saving Point Cloud",
+        nullptr,
+        ImGuiWindowFlags_AlwaysAutoResize |
+          ImGuiWindowFlags_NoCollapse |
+          ImGuiWindowFlags_NoMove |
+          ImGuiWindowFlags_NoResize |
+          ImGuiWindowFlags_NoSavedSettings)) {
+    ImGui::TextUnformatted(saveProgress_.message.c_str());
+    ImGui::ProgressBar((std::clamp)(progress, 0.0f, 1.0f), ImVec2(320.0f, 0.0f));
+    ImGui::Text(
+      "%llu / %llu points",
+      static_cast<unsigned long long>(saveProgress_.processed),
+      static_cast<unsigned long long>(saveProgress_.total));
+  }
+  ImGui::End();
+}
+
+void Application::UpdateSaveProgress(
+  std::string message,
+  std::uint64_t processed,
+  std::uint64_t total,
+  bool forcePresent) {
+  saveProgress_.active = true;
+  saveProgress_.message = std::move(message);
+  saveProgress_.processed = processed;
+  saveProgress_.total = total;
+  PresentSaveProgressFrame(forcePresent);
+}
+
+void Application::PresentSaveProgressFrame(bool forcePresent) {
+  if (!saveProgress_.active) {
+    return;
+  }
+
+  const double now = glfwGetTime();
+  if (!forcePresent && now - lastSaveProgressPresentSeconds_ < kSaveProgressPresentIntervalSeconds) {
+    return;
+  }
+
+  glfwPollEvents();
+  BeginImGuiFrame();
+  RenderSaveProgressOverlay();
+  RenderScene();
+  EndImGuiFrame();
+  lastSaveProgressPresentSeconds_ = now;
 }
 
 void Application::RenderSelectIsolatedDialog() {
@@ -3663,7 +3736,7 @@ void Application::StartSaveDialog() {
 
   const std::filesystem::path suggestedPath = BuildSuggestedExportPath(currentCloud_.sourcePath);
   if (std::optional<std::filesystem::path> selectedPath = SavePointCloudDialog(suggestedPath)) {
-    ExportPointCloud(EnsurePlyExtension(*selectedPath));
+    pendingExportPath_ = EnsurePlyExtension(*selectedPath);
   }
 }
 
@@ -3748,23 +3821,41 @@ void Application::ExportPointCloud(const std::filesystem::path& path) {
     return;
   }
 
+  const std::string fileName = path.filename().string();
   std::vector<PointVertex> exportPoints;
   exportPoints.reserve(currentCloud_.points.size());
-  for (const PointVertex& point : currentCloud_.points) {
-    if (IsPointHidden(PointPosition(point), committedHideBoxes_)) {
-      continue;
-    }
-
-    PointVertex exportedPoint = point;
-    exportedPoint.flags = 0;
-    exportPoints.push_back(exportedPoint);
-  }
+  saveProgress_ = {};
+  lastSaveProgressPresentSeconds_ = 0.0;
+  statusMessage_ = "Preparing export for " + fileName + "...";
+  UpdateSaveProgress(statusMessage_, 0, static_cast<std::uint64_t>(currentCloud_.points.size()), true);
 
   try {
-    SaveAsciiPly(path, exportPoints);
+    for (std::size_t pointIndex = 0; pointIndex < currentCloud_.points.size(); ++pointIndex) {
+      const PointVertex& point = currentCloud_.points[pointIndex];
+      if (!IsPointHidden(PointPosition(point), committedHideBoxes_)) {
+        PointVertex exportedPoint = point;
+        exportedPoint.flags = 0;
+        exportPoints.push_back(exportedPoint);
+      }
+
+      if ((pointIndex + 1) % kSaveProgressUpdatePoints == 0 || pointIndex + 1 == currentCloud_.points.size()) {
+        UpdateSaveProgress(
+          statusMessage_,
+          static_cast<std::uint64_t>(pointIndex + 1),
+          static_cast<std::uint64_t>(currentCloud_.points.size()));
+      }
+    }
+
+    statusMessage_ = "Saving " + fileName + "...";
+    UpdateSaveProgress(statusMessage_, 0, static_cast<std::uint64_t>(exportPoints.size()), true);
+    SaveAsciiPly(path, exportPoints, [this](const PlySaveProgress& progress) {
+      UpdateSaveProgress(progress.status, progress.pointsWritten, progress.totalPoints);
+    });
+    saveProgress_.active = false;
     statusMessage_ =
-      "Exported " + std::to_string(exportPoints.size()) + " points to " + path.filename().string() + ".";
+      "Exported " + std::to_string(exportPoints.size()) + " points to " + fileName + ".";
   } catch (const std::exception& exception) {
+    saveProgress_.active = false;
     statusMessage_ = std::string("Export failed: ") + exception.what();
   }
 }

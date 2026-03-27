@@ -577,6 +577,22 @@ void ReportProgress(
   });
 }
 
+void ReportSaveProgress(
+  const PlySaveProgressCallback& onProgress,
+  std::uint64_t pointsWritten,
+  std::uint64_t totalPoints,
+  std::string status) {
+  if (!onProgress) {
+    return;
+  }
+
+  onProgress(PlySaveProgress{
+    .pointsWritten = pointsWritten,
+    .totalPoints = totalPoints,
+    .status = std::move(status),
+  });
+}
+
 std::uint64_t ComputeSamplingStride(std::uint64_t vertexCount, std::uint64_t maxRenderPoints) {
   if (maxRenderPoints == 0 || vertexCount <= maxRenderPoints) {
     return 1;
@@ -748,12 +764,16 @@ PointCloudData LoadPly(
   return result;
 }
 
-void SaveAsciiPly(const std::filesystem::path& path, const std::vector<PointVertex>& points) {
+void SaveAsciiPly(
+  const std::filesystem::path& path,
+  const std::vector<PointVertex>& points,
+  const PlySaveProgressCallback& onProgress) {
   std::ofstream output(path, std::ios::out | std::ios::trunc);
   if (!output.is_open()) {
     throw std::runtime_error("Failed to open export path.");
   }
 
+  ReportSaveProgress(onProgress, 0, static_cast<std::uint64_t>(points.size()), "Writing header");
   output << "ply\n";
   output << "format ascii 1.0\n";
   output << "element vertex " << points.size() << '\n';
@@ -767,7 +787,8 @@ void SaveAsciiPly(const std::filesystem::path& path, const std::vector<PointVert
   output << "end_header\n";
 
   output << std::setprecision(std::numeric_limits<float>::max_digits10);
-  for (const PointVertex& point : points) {
+  for (std::size_t pointIndex = 0; pointIndex < points.size(); ++pointIndex) {
+    const PointVertex& point = points[pointIndex];
     output
       << point.x << ' '
       << point.y << ' '
@@ -776,11 +797,25 @@ void SaveAsciiPly(const std::filesystem::path& path, const std::vector<PointVert
       << static_cast<unsigned int>(point.g) << ' '
       << static_cast<unsigned int>(point.b) << ' '
       << static_cast<unsigned int>(point.a) << '\n';
+
+    if ((pointIndex + 1) % 50'000 == 0 || pointIndex + 1 == points.size()) {
+      ReportSaveProgress(
+        onProgress,
+        static_cast<std::uint64_t>(pointIndex + 1),
+        static_cast<std::uint64_t>(points.size()),
+        "Writing points");
+    }
   }
 
   if (!output.good()) {
     throw std::runtime_error("Failed while writing the exported point cloud.");
   }
+
+  ReportSaveProgress(
+    onProgress,
+    static_cast<std::uint64_t>(points.size()),
+    static_cast<std::uint64_t>(points.size()),
+    "Save complete");
 }
 
 }  // namespace pointmod

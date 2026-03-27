@@ -10,6 +10,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
+#include <optional>
 #include <thread>
 #include <unordered_map>
 
@@ -129,6 +130,13 @@ class Application {
     std::vector<std::uint32_t> completedMatches;
   };
 
+  struct SaveProgressState {
+    bool active = false;
+    std::uint64_t processed = 0;
+    std::uint64_t total = 0;
+    std::string message;
+  };
+
   void InitializeWindow();
   void InitializeImGui();
   void Shutdown();
@@ -136,6 +144,7 @@ class Application {
   void EndImGuiFrame();
   float RenderMenuBar();
   void RenderUi();
+  void RenderSaveProgressOverlay();
   void RenderSelectIsolatedDialog();
   void RenderScene();
   void UpdateHideBoxGizmo();
@@ -155,6 +164,8 @@ class Application {
   void ResetView();
   void OpenPointCloud(const std::filesystem::path& path);
   void ExportPointCloud(const std::filesystem::path& path);
+  void UpdateSaveProgress(std::string message, std::uint64_t processed, std::uint64_t total, bool forcePresent = false);
+  void PresentSaveProgressFrame(bool forcePresent = false);
   void AddHideBox();
   void ClearHideBoxes();
   void ClearPointSelections();
@@ -186,6 +197,7 @@ class Application {
   PointCloudRenderer renderer_;
   OrbitCamera camera_;
   PointCloudData currentCloud_;
+  std::optional<std::filesystem::path> pendingExportPath_;
   std::string statusMessage_ = "Open a .ply file, drag one into the window, or use the Open button.";
   float pointSize_ = 2.0f;
   float pendingScrollY_ = 0.0f;
@@ -280,6 +292,8 @@ class Application {
   std::vector<std::uint32_t> isolatedMatchedPointIndices_;
   std::size_t isolatedVisiblePointCount_ = 0;
   std::size_t isolatedProcessCursor_ = 0;
+  SaveProgressState saveProgress_;
+  double lastSaveProgressPresentSeconds_ = 0.0;
   std::mutex isolatedSearchWorkerMutex_;
   IsolatedSearchWorkerState isolatedSearchWorkerState_;
   std::jthread isolatedSearchWorker_;

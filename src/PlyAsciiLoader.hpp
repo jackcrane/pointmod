@@ -21,7 +21,14 @@ struct PlyLoadProgress {
   std::string status;
 };
 
+struct PlySaveProgress {
+  std::uint64_t pointsWritten = 0;
+  std::uint64_t totalPoints = 0;
+  std::string status;
+};
+
 using PlyLoadProgressCallback = std::function<void(const PlyLoadProgress&)>;
+using PlySaveProgressCallback = std::function<void(const PlySaveProgress&)>;
 using PlyPointChunkCallback = std::function<void(PointCloudChunk&&)>;
 
 PointCloudData LoadPly(
@@ -30,6 +37,9 @@ PointCloudData LoadPly(
   std::stop_token stopToken,
   const PlyLoadProgressCallback& onProgress,
   const PlyPointChunkCallback& onChunk);
-void SaveAsciiPly(const std::filesystem::path& path, const std::vector<PointVertex>& points);
+void SaveAsciiPly(
+  const std::filesystem::path& path,
+  const std::vector<PointVertex>& points,
+  const PlySaveProgressCallback& onProgress = {});
 
 }  // namespace pointmod
