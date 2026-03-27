@@ -36,10 +36,6 @@ export default () => (
         <div style={{ flex: 1 }} />
       </div>
     </div>
-    <div className="content">
-      <video autoPlay muted loop>
-        <source src={video} type="video/mp4" />
-      </video>
-    </div>
+    <div className="content"></div>
   </main>
 );
