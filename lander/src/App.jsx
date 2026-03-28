@@ -2,6 +2,7 @@ import React from "react";
 import "./index.css";
 import Dither from "./dither/index.jsx";
 import icon from "./logo.svg";
+import logoFooter from "./logo-footer.svg";
 import { ChevronRight } from "./ChevronRight.jsx";
 import { Reveal } from "./reveal/reveal.jsx";
 import smallPoints from "./screenshots/small-points.png";
@@ -161,7 +162,7 @@ export default () => (
         />
         <div className="dither-overlay">
           <div className="footer-content">
-            <img src={icon} className="icon" alt="icon" />
+            <img src={logoFooter} className="icon" alt="icon" />
             <div
               style={{
                 display: "flex",
