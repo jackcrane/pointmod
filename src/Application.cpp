@@ -660,7 +660,7 @@ void ResetDepthCurve(std::array<float, SampleCount>& curve) {
     const float depth = curve.size() > 1
       ? static_cast<float>(index) / static_cast<float>(curve.size() - 1)
       : 0.0f;
-    curve[index] = 1.0f - depth;
+    curve[index] = 1.0f - (0.92f * depth);
   }
 }
 
@@ -2575,7 +2575,7 @@ void Application::RenderScene() {
   int framebufferHeight = 0;
   glfwGetFramebufferSize(window_, &framebufferWidth, &framebufferHeight);
 
-  glClearColor(0.05f, 0.07f, 0.10f, 1.0f);
+  glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
   const std::vector<SelectionSphere> selectionSpheres = BuildSelectionSpheres();

@@ -238,7 +238,7 @@ class Application {
       const float depth = curve.size() > 1
         ? static_cast<float>(index) / static_cast<float>(curve.size() - 1)
         : 0.0f;
-      curve[index] = 1.0f - depth;
+      curve[index] = 1.0f - (0.92f * depth);
     }
     return curve;
   }();
