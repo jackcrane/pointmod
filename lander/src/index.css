@@ -102,6 +102,9 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
+  cursor: pointer;
+  font: inherit;
+  appearance: none;
 }
 
 .cta .arrow-line {
@@ -125,6 +128,11 @@ body {
 
 .cta:hover {
   background-color: hsl(0, 0%, 100%);
+}
+
+.cta:disabled {
+  opacity: 0.7;
+  cursor: wait;
 }
 
 .content {
@@ -252,6 +260,178 @@ body {
   justify-content: space-between;
 }
 
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background-color: rgba(0, 0, 0, 0.8);
+  backdrop-filter: blur(10px);
+}
+
+.access-modal {
+  width: min(100%, 560px);
+  border: 1px solid rgb(96, 96, 96);
+  outline: 2px solid rgb(0, 0, 0);
+  background:
+    linear-gradient(180deg, rgba(18, 18, 18, 0.96), rgba(0, 0, 0, 0.98));
+  color: hsl(0, 0%, 88%);
+  padding: 24px;
+  text-align: left;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5);
+}
+
+.modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.modal-header h2 {
+  margin: 0;
+  font-size: 2rem;
+  font-weight: 400;
+}
+
+.modal-copy {
+  margin: 8px 0 0;
+  color: hsl(0, 0%, 70%);
+}
+
+.modal-close {
+  border: 1px solid rgb(96, 96, 96);
+  background: transparent;
+  color: hsl(0, 0%, 88%);
+  font: inherit;
+  cursor: pointer;
+  padding: 6px 10px;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.access-form {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  margin-top: 24px;
+}
+
+.modal-success {
+  margin-top: 24px;
+  border: 1px solid rgb(64, 64, 64);
+  background-color: rgba(255, 255, 255, 0.04);
+  padding: 18px;
+}
+
+.modal-success p {
+  margin: 0;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.field > span {
+  font-family: "Iosevka Charon Mono", monospace;
+  font-size: 0.95rem;
+  color: hsl(0, 0%, 88%);
+}
+
+.field input[type="text"],
+.field input[type="email"] {
+  width: 100%;
+  border: 1px solid rgb(96, 96, 96);
+  background-color: rgba(255, 255, 255, 0.04);
+  color: hsl(0, 0%, 92%);
+  padding: 12px 14px;
+  font-size: 1rem;
+}
+
+.field input[type="text"]:focus,
+.field input[type="email"]:focus,
+.radio-option:has(input:focus-visible) {
+  outline: 1px solid hsl(0, 0%, 92%);
+  outline-offset: 2px;
+}
+
+.radio-field {
+  margin: 0;
+}
+
+.radio-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.radio-option {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  cursor: pointer;
+  border: 1px solid rgb(96, 96, 96);
+  background-color: #000;
+  padding: 12px 14px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.radio-option input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.radio-mark {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  border: 1px solid hsl(0, 0%, 92%);
+  background-color: #000;
+}
+
+.radio-option span:last-child {
+  font-family: "Iosevka Charon Mono", monospace;
+}
+
+.radio-option:has(input:checked) {
+  border-color: hsl(0, 0%, 92%);
+}
+
+.radio-option:has(input:checked) .radio-mark {
+  background-color: hsl(0, 0%, 92%);
+  box-shadow: inset 0 0 0 3px #000;
+}
+
+.radio-option:hover {
+  border-color: hsl(0, 0%, 92%);
+}
+
+.radio-option:has(input:checked):hover {
+  border-color: hsl(0, 0%, 92%);
+}
+
+.modal-submit {
+  align-self: flex-start;
+}
+
+.form-status {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.form-status-error {
+  color: hsl(0, 70%, 72%);
+}
+
 @media screen and (max-width: 1100px) {
   .footer-content {
     flex-direction: column-reverse;
@@ -267,6 +447,39 @@ body {
   .footer-content .icon {
     width: 70%;
     height: auto;
+  }
+
+  .header,
+  .content,
+  .footer-content {
+    width: calc(100% - 32px);
+  }
+
+  .title {
+    font-size: 4rem;
+    letter-spacing: -0.2rem;
+  }
+
+  .info {
+    flex-direction: column;
+    min-height: unset;
+  }
+
+  .info .title {
+    transform: none;
+    padding: 12px 12px 0;
+  }
+
+  .info .detail {
+    margin-left: 0;
+  }
+
+  .access-modal {
+    padding: 20px;
+  }
+
+  .modal-header {
+    flex-direction: column;
   }
 }
 
