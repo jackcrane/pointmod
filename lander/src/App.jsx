@@ -392,8 +392,6 @@ export default function App() {
                   src={logoFooter}
                   className="icon"
                   alt="pointmod"
-                  width="75"
-                  height="24"
                   loading="lazy"
                   decoding="async"
                 />
