@@ -58,6 +58,10 @@ export const Reveal = ({
         src={beforeImage}
         alt={beforeAlt}
         className="picture-reveal__image picture-reveal__image--base"
+        width="1852"
+        height="1358"
+        loading="lazy"
+        decoding="async"
         draggable="false"
       />
 
@@ -66,6 +70,10 @@ export const Reveal = ({
           src={afterImage}
           alt={afterAlt}
           className="picture-reveal__image picture-reveal__image--overlay"
+          width="1852"
+          height="1358"
+          loading="lazy"
+          decoding="async"
           draggable="false"
         />
       </div>

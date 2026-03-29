@@ -220,7 +220,14 @@ export default function App() {
 
           <div className="dither-overlay">
             <div className="header">
-              <img src={icon} className="icon" alt="icon" />
+              <img
+                src={icon}
+                className="icon"
+                alt="pointmod"
+                width="75"
+                height="24"
+                decoding="async"
+              />
               <div style={{ flex: 1 }} />
               <AccessButton onClick={openAccessModal} />
             </div>
@@ -234,7 +241,14 @@ export default function App() {
         <div className="content">
           <div className="grid">
             <div className="item">
-              <img src={color} alt="Color rendering" />
+              <img
+                src={color}
+                alt="Color rendering"
+                width="1852"
+                height="1358"
+                loading="lazy"
+                decoding="async"
+              />
               <div className="caption">
                 <h2>Color rendering</h2>
                 <p>
@@ -244,7 +258,14 @@ export default function App() {
               </div>
             </div>
             <div className="item">
-              <img src={depth} alt="Depth rendering" />
+              <img
+                src={depth}
+                alt="Depth rendering"
+                width="1852"
+                height="1358"
+                loading="lazy"
+                decoding="async"
+              />
               <div className="caption">
                 <h2>Depth rendering</h2>
                 <p>
@@ -254,7 +275,14 @@ export default function App() {
               </div>
             </div>
             <div className="item">
-              <img src={isolation} alt="Select isolated points" />
+              <img
+                src={isolation}
+                alt="Select isolated points"
+                width="1852"
+                height="1358"
+                loading="lazy"
+                decoding="async"
+              />
               <div className="caption">
                 <h2>Isolated selection</h2>
                 <p>
@@ -264,7 +292,14 @@ export default function App() {
               </div>
             </div>
             <div className="item">
-              <img src={segmentation} alt="Easy segmentation" />
+              <img
+                src={segmentation}
+                alt="Easy segmentation"
+                width="1852"
+                height="1358"
+                loading="lazy"
+                decoding="async"
+              />
               <div className="caption">
                 <h2>Easy segmentation</h2>
                 <p>
@@ -289,7 +324,14 @@ export default function App() {
               </div>
             </div>
             <div className="item">
-              <img src={perf} alt="Great performance" />
+              <img
+                src={perf}
+                alt="Great performance"
+                width="1852"
+                height="1358"
+                loading="lazy"
+                decoding="async"
+              />
               <div className="caption">
                 <h2>Great performance</h2>
                 <p>
@@ -346,7 +388,15 @@ export default function App() {
             />
             <div className="dither-overlay">
               <div className="footer-content">
-                <img src={logoFooter} className="icon" alt="icon" />
+                <img
+                  src={logoFooter}
+                  className="icon"
+                  alt="pointmod"
+                  width="75"
+                  height="24"
+                  loading="lazy"
+                  decoding="async"
+                />
                 <div
                   style={{
                     display: "flex",
