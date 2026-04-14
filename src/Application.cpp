@@ -2574,6 +2574,13 @@ void Application::RenderScene() {
   int framebufferWidth = 0;
   int framebufferHeight = 0;
   glfwGetFramebufferSize(window_, &framebufferWidth, &framebufferHeight);
+  float projectionAspectRatio = framebufferHeight > 0
+    ? static_cast<float>(framebufferWidth) / static_cast<float>(framebufferHeight)
+    : 1.0f;
+  if (const ImGuiViewport* viewport = ImGui::GetMainViewport();
+      viewport != nullptr && viewport->Size.x > 0.0f && viewport->Size.y > 0.0f) {
+    projectionAspectRatio = viewport->Size.x / viewport->Size.y;
+  }
 
   glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -2601,6 +2608,7 @@ void Application::RenderScene() {
     camera_,
     framebufferWidth,
     framebufferHeight,
+    projectionAspectRatio,
     pointSize_,
     pointColorMode_,
     depthColorCurve_,

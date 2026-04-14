@@ -38,6 +38,7 @@ class PointCloudRenderer {
     const OrbitCamera& camera,
     int viewportWidth,
     int viewportHeight,
+    float projectionAspectRatio,
     float pointSize,
     PointColorMode colorMode,
     const std::array<float, kDepthColorCurveSampleCount>& depthCurve,

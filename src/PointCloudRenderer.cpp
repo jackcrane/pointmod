@@ -593,6 +593,7 @@ void PointCloudRenderer::Render(
   const OrbitCamera& camera,
   int viewportWidth,
   int viewportHeight,
+  float projectionAspectRatio,
   float pointSize,
   PointColorMode colorMode,
   const std::array<float, kDepthColorCurveSampleCount>& depthCurve,
@@ -621,7 +622,10 @@ void PointCloudRenderer::Render(
   glEnable(GL_PROGRAM_POINT_SIZE);
 
   glUseProgram(program_);
-  const Mat4 viewProjection = camera.ViewProjection(static_cast<float>(viewportWidth) / static_cast<float>(viewportHeight));
+  const float aspectRatio = projectionAspectRatio > 0.0f
+    ? projectionAspectRatio
+    : static_cast<float>(viewportWidth) / static_cast<float>(viewportHeight);
+  const Mat4 viewProjection = camera.ViewProjection(aspectRatio);
   const Vec3 eye = camera.Position();
   const std::array<float, 2> depthRange = ComputeDepthRange(bounds_, camera);
   glUniformMatrix4fv(viewProjectionLocation_, 1, GL_FALSE, viewProjection.m);
